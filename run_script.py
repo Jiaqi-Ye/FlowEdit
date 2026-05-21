@@ -77,7 +77,7 @@ if __name__ == "__main__":
 
             src_prompt = data_dict["source_prompt"]
             tar_prompts = data_dict["target_prompts"]
-            negative_prompt =  "" # optionally add support for negative prompts (SD3)
+            negative_prompt = data_dict.get("negative_prompt", "")
             image_src_path = data_dict["input_img"]
 
             # load image
@@ -157,6 +157,7 @@ if __name__ == "__main__":
                     "n_min": n_min,
                     "n_max": n_max,
                     "seed": seed,
+                    "negative_prompt": negative_prompt,
                     "elapsed_seconds": f"{elapsed_seconds:.3f}",
                     "output_dir": save_dir,
                 })
@@ -164,6 +165,7 @@ if __name__ == "__main__":
                 with open(f"{save_dir}/prompts.txt", "w") as f:
                     f.write(f"Source prompt: {src_prompt}\n")
                     f.write(f"Target prompt: {tar_prompt}\n")
+                    f.write(f"Negative prompt: {negative_prompt}\n")
                     f.write(f"Seed: {seed}\n")
                     f.write(f"Sampler type: {model_type}\n")
                     f.write(f"Solver type: {solver_type}\n")

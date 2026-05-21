@@ -1,29 +1,35 @@
 -
     input_img: Data/Images/lighthouse.png
-    source_prompt: A realistic photo of a tall white lighthouse under a blue-hour starry sky, with warm light from the beacon, the same vertical tower composition, natural perspective, and detailed architectural edges.
+    source_prompt: A realistic photo of a single lighthouse tower at blue hour, centered in the same vertical composition, with warm light, blue starry sky, natural perspective, crisp architectural edges, and the original background preserved.
 
     target_prompts:
-    - A realistic photo of Big Ben, the Elizabeth Tower clock tower in London, replacing the lighthouse in the same vertical composition under the same blue-hour starry sky, with a warm illuminated clock face, crisp stone details, realistic lighting, and the original camera angle and background atmosphere preserved.
+    - A realistic photo of a single Big Ben clock tower at blue hour, centered in the same vertical composition, with warm light, blue starry sky, natural perspective, crisp architectural edges, and the original background preserved.
+
+    negative_prompt: wide Parliament building, extra towers, extra buildings, changed background, changed camera angle, blurry architecture, cartoon, oversaturated colors
 
     target_codes:
     - lighthouse_to_big_ben
 
 -
     input_img: Data/Images/cat.png
-    source_prompt: A close-up realistic photo of a cat sitting calmly, with natural fur texture, clear facial details, soft lighting, and the original framing preserved.
+    source_prompt: A close-up realistic photo of a small brown tabby cat sitting calmly on grass, with natural warm fur color, realistic lighting, clear facial details, and the original pose, framing, and background preserved.
 
     target_prompts:
-    - A close-up realistic photo of a small fluffy dog sitting calmly in the same pose, with natural fur texture, clear facial details, soft lighting, and the original framing and background preserved.
+    - A close-up realistic photo of a small brown and white puppy sitting calmly on grass, with natural warm fur color, realistic lighting, clear facial details, and the original pose, framing, and background preserved.
+
+    negative_prompt: green tint, cyan tint, neon colors, oversaturated colors, cartoon, distorted face, changed background, changed pose
 
     target_codes:
     - cat_to_small_dog
 
 -
     input_img: Data/Images/gas_station.png
-    source_prompt: A realistic roadside gas station photo in a desert setting, with cars, fuel pumps, a large rectangular sign, bright daylight, and the original camera viewpoint preserved.
+    source_prompt: A realistic roadside gas station photo in the same desert setting, with cars, fuel pumps, bright daylight, original camera viewpoint, and a large rectangular sign that clearly reads CAFE in bold red letters.
 
     target_prompts:
-    - A realistic roadside gas station photo in the same desert setting, with the large rectangular sign clearly changed to read CVPR in bold red letters, while preserving the cars, fuel pumps, lighting, camera viewpoint, and overall scene layout.
+    - A realistic roadside gas station photo in the same desert setting, with cars, fuel pumps, bright daylight, original camera viewpoint, and a large rectangular sign that clearly reads CVPR in bold red letters.
+
+    negative_prompt: changed cars, changed fuel pumps, changed layout, extra text, misspelled text, blurry text, cartoon, oversaturated colors
 
     target_codes:
     - gas_station_to_cvpr
