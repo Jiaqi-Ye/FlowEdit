@@ -1,23 +1,19 @@
 -
-    input_img:  example_images/gas_station.png
-    source_prompt: A gas station with a white and red sign that reads "CAFE". There are several cars parked in front of the gas station, including a white car and a van.
-
-    target_prompts:
-    - A modern electric vehicle charging plaza with a clean blue sign that reads "EV HUB". Multiple charging stalls and cars are visible in front, with realistic daylight and shadows.
-    - A gas station with a white and red sign that reads "CVPR 2026", with stronger contrast, cleaner lettering, and sharper scene details while keeping the original camera viewpoint.
-
-    target_codes:
-    - ev_hub_scene
-    - cvpr_2026_text
-
--
-    input_img:  example_images/lighthouse.png
+    input_img: example_images/lighthouse.png
     source_prompt: The image features a tall white lighthouse standing prominently on a hill, with a beautiful blue sky in the background. The lighthouse is illuminated by a bright light, making it a prominent landmark in the scene.
 
     target_prompts:
-    - A tall Big Ben clock tower standing prominently on a hill, with a beautiful blue sky and visible architectural details on the tower while preserving the overall scene composition.
-    - A stone watchtower with a glowing beacon standing on the same hill at blue hour, with rich sky color gradients and crisp structural edges.
+    - A stone watchtower with a glowing beacon standing on the same hill at blue hour, with rich sky color gradients, realistic atmospheric depth, crisp structural edges, and the original camera viewpoint preserved.
 
     target_codes:
-    - big_ben_detailed
-    - stone_watchtower
+    - stone_watchtower_blue_hour
+
+-
+    input_img: Data/Images/cat.png
+    source_prompt: A close-up photo of a cat sitting calmly, with natural fur texture, clear facial details, and realistic lighting.
+
+    target_prompts:
+    - A close-up photo of a small fluffy dog sitting calmly in the same pose, with realistic fur texture, clear facial details, natural lighting, and the original background and framing preserved.
+
+    target_codes:
+    - cat_to_small_dog

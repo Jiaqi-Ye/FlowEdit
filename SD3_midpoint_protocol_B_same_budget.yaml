@@ -1,29 +1,29 @@
 -
-  exp_name: "FlowEdit_SD3_Euler"
+  exp_name: "B_same_budget_Euler_50"
   dataset_yaml: edits_midpoint_eval.yaml
   model_type: "SD3"
   model_id: "stabilityai/stable-diffusion-3-medium-diffusers"
   sampler_type: "FlowEditSD3"
   solver_type: "euler"
-  T_steps: 24
+  T_steps: 50
   n_avg: 1
   src_guidance_scale: 3.5
-  tar_guidance_scale: 12.0
+  tar_guidance_scale: 10.5
   n_min: 0
-  n_max: 16
+  n_max: 50
   seed: 42
 
 -
-  exp_name: "FlowEdit_SD3_Midpoint"
+  exp_name: "B_same_budget_Midpoint_25"
   dataset_yaml: edits_midpoint_eval.yaml
   model_type: "SD3"
   model_id: "stabilityai/stable-diffusion-3-medium-diffusers"
   sampler_type: "FlowEditSD3"
   solver_type: "midpoint"
-  T_steps: 12
+  T_steps: 25
   n_avg: 1
   src_guidance_scale: 3.5
-  tar_guidance_scale: 12.0
+  tar_guidance_scale: 10.5
   n_min: 0
-  n_max: 8
+  n_max: 25
   seed: 42
