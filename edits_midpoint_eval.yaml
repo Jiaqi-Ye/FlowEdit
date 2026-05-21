@@ -1,19 +1,29 @@
 -
-    input_img: example_images/lighthouse.png
-    source_prompt: The image features a tall white lighthouse standing prominently on a hill, with a beautiful blue sky in the background. The lighthouse is illuminated by a bright light, making it a prominent landmark in the scene.
+    input_img: Data/Images/lighthouse.png
+    source_prompt: A realistic photo of a tall white lighthouse under a blue-hour starry sky, with warm light from the beacon, the same vertical tower composition, natural perspective, and detailed architectural edges.
 
     target_prompts:
-    - A stone watchtower with a glowing beacon standing on the same hill at blue hour, with rich sky color gradients, realistic atmospheric depth, crisp structural edges, and the original camera viewpoint preserved.
+    - A realistic photo of Big Ben, the Elizabeth Tower clock tower in London, replacing the lighthouse in the same vertical composition under the same blue-hour starry sky, with a warm illuminated clock face, crisp stone details, realistic lighting, and the original camera angle and background atmosphere preserved.
 
     target_codes:
-    - stone_watchtower_blue_hour
+    - lighthouse_to_big_ben
 
 -
     input_img: Data/Images/cat.png
-    source_prompt: A close-up photo of a cat sitting calmly, with natural fur texture, clear facial details, and realistic lighting.
+    source_prompt: A close-up realistic photo of a cat sitting calmly, with natural fur texture, clear facial details, soft lighting, and the original framing preserved.
 
     target_prompts:
-    - A close-up photo of a small fluffy dog sitting calmly in the same pose, with realistic fur texture, clear facial details, natural lighting, and the original background and framing preserved.
+    - A close-up realistic photo of a small fluffy dog sitting calmly in the same pose, with natural fur texture, clear facial details, soft lighting, and the original framing and background preserved.
 
     target_codes:
     - cat_to_small_dog
+
+-
+    input_img: Data/Images/gas_station.png
+    source_prompt: A realistic roadside gas station photo in a desert setting, with cars, fuel pumps, a large rectangular sign, bright daylight, and the original camera viewpoint preserved.
+
+    target_prompts:
+    - A realistic roadside gas station photo in the same desert setting, with the large rectangular sign clearly changed to read CVPR in bold red letters, while preserving the cars, fuel pumps, lighting, camera viewpoint, and overall scene layout.
+
+    target_codes:
+    - gas_station_to_cvpr

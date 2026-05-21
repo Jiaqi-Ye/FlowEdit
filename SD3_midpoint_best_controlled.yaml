@@ -1,0 +1,29 @@
+-
+  exp_name: "Best16_Control_Euler"
+  dataset_yaml: edits_midpoint_eval.yaml
+  model_type: "SD3"
+  model_id: "stabilityai/stable-diffusion-3-medium-diffusers"
+  sampler_type: "FlowEditSD3"
+  solver_type: "euler"
+  T_steps: 16
+  n_avg: 1
+  src_guidance_scale: 3.5
+  tar_guidance_scale: 10.5
+  n_min: 0
+  n_max: 16
+  seed: 42
+
+-
+  exp_name: "Best16_Control_Midpoint"
+  dataset_yaml: edits_midpoint_eval.yaml
+  model_type: "SD3"
+  model_id: "stabilityai/stable-diffusion-3-medium-diffusers"
+  sampler_type: "FlowEditSD3"
+  solver_type: "midpoint"
+  T_steps: 16
+  n_avg: 1
+  src_guidance_scale: 3.5
+  tar_guidance_scale: 10.5
+  n_min: 0
+  n_max: 16
+  seed: 42
