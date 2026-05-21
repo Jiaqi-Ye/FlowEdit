@@ -38,11 +38,14 @@ def find_output_png(output_dir):
 @torch.no_grad()
 def clip_alignment_score(model, processor, image, prompt, device):
     inputs = processor(text=[prompt], images=image, return_tensors="pt", padding=True).to(device)
-    image_features = model.get_image_features(pixel_values=inputs["pixel_values"])
-    text_features = model.get_text_features(
-        input_ids=inputs["input_ids"],
-        attention_mask=inputs["attention_mask"],
-    )
+
+    # Newer Transformers versions can return model-output objects from the
+    # get_*_features helpers. Calling the full CLIP model gives projected
+    # image/text embeddings with matching dimensions across versions.
+    outputs = model(**inputs)
+    image_features = outputs.image_embeds
+    text_features = outputs.text_embeds
+
     image_features = F.normalize(image_features, dim=-1)
     text_features = F.normalize(text_features, dim=-1)
     return torch.sum(image_features * text_features, dim=-1).item()
