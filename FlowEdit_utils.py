@@ -50,6 +50,23 @@ def calculate_shift(
     return mu
 
 
+def normalize_solver_type(solver_type: str) -> str:
+    solver_type = solver_type.lower()
+    if solver_type in {"euler", "midpoint"}:
+        return solver_type
+    raise ValueError(f"Unsupported solver_type: {solver_type}. Use 'euler' or 'midpoint'.")
+
+
+def velocity_to_score(x, v, t, eps: float = 1e-5):
+    """Convert rectified-flow velocity to score using score=(t*v-x)/(1-t)."""
+    if not torch.is_tensor(t):
+        t = torch.tensor(t, device=x.device, dtype=x.dtype)
+    t = t.to(device=x.device, dtype=x.dtype)
+    while t.ndim < x.ndim:
+        t = t.view(*t.shape, 1)
+    return (t * v - x) / (1 - t).clamp_min(eps)
+
+
 
 def calc_v_sd3(pipe, src_tar_latent_model_input, src_tar_prompt_embeds, src_tar_pooled_prompt_embeds, src_guidance_scale, tar_guidance_scale, t):
     # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
@@ -120,9 +137,11 @@ def FlowEditSD3(pipe,
     src_guidance_scale: float = 3.5,
     tar_guidance_scale: float = 13.5,
     n_min: int = 0,
-    n_max: int = 15,):
+    n_max: int = 15,
+    solver_type: str = "euler",):
     
     device = x_src.device
+    solver_type = normalize_solver_type(solver_type)
 
     timesteps, T_steps = retrieve_timesteps(scheduler, T_steps, device, timesteps=None)
 
@@ -168,6 +187,40 @@ def FlowEditSD3(pipe,
     # initialize our ODE Zt_edit_1=x_src
     zt_edit = x_src.clone()
 
+    def flowedit_delta(z_edit, t_unit, t_model, noises):
+        V_delta_avg = torch.zeros_like(x_src)
+        for fwd_noise in noises:
+            zt_src = (1-t_unit)*x_src + (t_unit)*fwd_noise
+            zt_tar = z_edit + zt_src - x_src
+
+            src_tar_latent_model_input = torch.cat([zt_src, zt_src, zt_tar, zt_tar])
+
+            Vt_src, Vt_tar = calc_v_sd3(
+                pipe,
+                src_tar_latent_model_input,
+                src_tar_prompt_embeds,
+                src_tar_pooled_prompt_embeds,
+                src_guidance_scale,
+                tar_guidance_scale,
+                t_model,
+            )
+
+            V_delta_avg += (1/n_avg) * (Vt_tar - Vt_src)
+        return V_delta_avg
+
+    def target_velocity(z_tar, t_model):
+        src_tar_latent_model_input = torch.cat([z_tar, z_tar, z_tar, z_tar])
+        _, Vt_tar = calc_v_sd3(
+            pipe,
+            src_tar_latent_model_input,
+            src_tar_prompt_embeds,
+            src_tar_pooled_prompt_embeds,
+            src_guidance_scale,
+            tar_guidance_scale,
+            t_model,
+        )
+        return Vt_tar
+
     for i, t in tqdm(enumerate(timesteps)):
         
         if T_steps - i > n_max:
@@ -175,32 +228,28 @@ def FlowEditSD3(pipe,
         
         t_i = t/1000
         if i+1 < len(timesteps): 
-            t_im1 = (timesteps[i+1])/1000
+            t_next = timesteps[i+1]
+            t_im1 = t_next/1000
         else:
+            t_next = torch.zeros_like(t).to(t.device)
             t_im1 = torch.zeros_like(t_i).to(t_i.device)
+        dt = t_im1 - t_i
+        t_mid = t + 0.5 * (t_next - t)
+        t_mid_i = t_mid/1000
         
         if T_steps - i > n_min:
 
-            # Calculate the average of the V predictions
-            V_delta_avg = torch.zeros_like(x_src)
-            for k in range(n_avg):
+            fwd_noises = [torch.randn_like(x_src).to(x_src.device) for _ in range(n_avg)]
+            V_delta_avg = flowedit_delta(zt_edit, t_i, t, fwd_noises)
 
-                fwd_noise = torch.randn_like(x_src).to(x_src.device)
-                
-                zt_src = (1-t_i)*x_src + (t_i)*fwd_noise
-
-                zt_tar = zt_edit + zt_src - x_src
-
-                src_tar_latent_model_input = torch.cat([zt_src, zt_src, zt_tar, zt_tar]) if pipe.do_classifier_free_guidance else (zt_src, zt_tar) 
-
-                Vt_src, Vt_tar = calc_v_sd3(pipe, src_tar_latent_model_input,src_tar_prompt_embeds, src_tar_pooled_prompt_embeds, src_guidance_scale, tar_guidance_scale, t)
-
-                V_delta_avg += (1/n_avg) * (Vt_tar - Vt_src) # - (hfg-1)*( x_src))
+            if solver_type == "midpoint":
+                zt_mid = (zt_edit.to(torch.float32) + 0.5 * dt * V_delta_avg).to(V_delta_avg.dtype)
+                V_delta_avg = flowedit_delta(zt_mid, t_mid_i, t_mid, fwd_noises)
 
             # propagate direct ODE
             zt_edit = zt_edit.to(torch.float32)
 
-            zt_edit = zt_edit + (t_im1 - t_i) * V_delta_avg
+            zt_edit = zt_edit + dt * V_delta_avg
             
             zt_edit = zt_edit.to(V_delta_avg.dtype)
 
@@ -211,16 +260,18 @@ def FlowEditSD3(pipe,
                 fwd_noise = torch.randn_like(x_src).to(x_src.device)
                 xt_src = scale_noise(scheduler, x_src, t, noise=fwd_noise)
                 xt_tar = zt_edit + xt_src - x_src
-                
-            src_tar_latent_model_input = torch.cat([xt_tar, xt_tar, xt_tar, xt_tar]) if pipe.do_classifier_free_guidance else (xt_src, xt_tar)
 
-            _, Vt_tar = calc_v_sd3(pipe, src_tar_latent_model_input,src_tar_prompt_embeds, src_tar_pooled_prompt_embeds, src_guidance_scale, tar_guidance_scale, t)
+            Vt_tar = target_velocity(xt_tar, t)
+
+            if solver_type == "midpoint":
+                xt_mid = (xt_tar.to(torch.float32) + 0.5 * dt * Vt_tar).to(Vt_tar.dtype)
+                Vt_tar = target_velocity(xt_mid, t_mid)
 
             xt_tar = xt_tar.to(torch.float32)
 
-            prev_sample = xt_tar + (t_im1 - t_i) * (Vt_tar)
+            prev_sample = xt_tar + dt * (Vt_tar)
 
-            prev_sample = prev_sample.to(noise_pred_tar.dtype)
+            prev_sample = prev_sample.to(Vt_tar.dtype)
 
             xt_tar = prev_sample
         
@@ -240,9 +291,11 @@ def FlowEditFLUX(pipe,
     src_guidance_scale: float = 1.5,
     tar_guidance_scale: float = 5.5,
     n_min: int = 0,
-    n_max: int = 24,):
+    n_max: int = 24,
+    solver_type: str = "euler",):
 
     device = x_src.device
+    solver_type = normalize_solver_type(solver_type)
     orig_height, orig_width = x_src.shape[2]*pipe.vae_scale_factor//2, x_src.shape[3]*pipe.vae_scale_factor//2
     num_channels_latents = pipe.transformer.config.in_channels // 4
 
@@ -319,6 +372,43 @@ def FlowEditFLUX(pipe,
     # initialize our ODE Zt_edit_1=x_src
     zt_edit = x_src_packed.clone()
 
+    def flowedit_delta(z_edit, sigma, t_model, noises):
+        V_delta_avg = torch.zeros_like(x_src_packed)
+        for fwd_noise in noises:
+            zt_src = (1-sigma)*x_src_packed + (sigma)*fwd_noise
+            zt_tar = z_edit + zt_src - x_src_packed
+
+            Vt_src = calc_v_flux(pipe,
+                                                latents=zt_src,
+                                                prompt_embeds=src_prompt_embeds,
+                                                pooled_prompt_embeds=src_pooled_prompt_embeds,
+                                                guidance=src_guidance,
+                                                text_ids=src_text_ids,
+                                                latent_image_ids=latent_src_image_ids,
+                                                t=t_model)
+
+            Vt_tar = calc_v_flux(pipe,
+                                                latents=zt_tar,
+                                                prompt_embeds=tar_prompt_embeds,
+                                                pooled_prompt_embeds=tar_pooled_prompt_embeds,
+                                                guidance=tar_guidance,
+                                                text_ids=tar_text_ids,
+                                                latent_image_ids=latent_tar_image_ids,
+                                                t=t_model)
+
+            V_delta_avg += (1/n_avg) * (Vt_tar - Vt_src)
+        return V_delta_avg
+
+    def target_velocity(z_tar, t_model):
+        return calc_v_flux(pipe,
+                            latents=z_tar,
+                            prompt_embeds=tar_prompt_embeds,
+                            pooled_prompt_embeds=tar_pooled_prompt_embeds,
+                            guidance=tar_guidance,
+                            text_ids=tar_text_ids,
+                            latent_image_ids=latent_tar_image_ids,
+                            t=t_model)
+
     for i, t in tqdm(enumerate(timesteps)):
         
         if T_steps - i > n_max:
@@ -330,46 +420,27 @@ def FlowEditFLUX(pipe,
             t_im1 = scheduler.sigmas[scheduler.step_index + 1]
         else:
             t_im1 = t_i
+        if i+1 < len(timesteps):
+            t_next = timesteps[i+1]
+        else:
+            t_next = torch.zeros_like(t).to(t.device)
+        dt = t_im1 - t_i
+        t_mid = t + 0.5 * (t_next - t)
+        sigma_mid = t_i + 0.5 * dt
         
         if T_steps - i > n_min:
 
-            # Calculate the average of the V predictions
-            V_delta_avg = torch.zeros_like(x_src_packed)
+            fwd_noises = [torch.randn_like(x_src_packed).to(x_src_packed.device) for _ in range(n_avg)]
+            V_delta_avg = flowedit_delta(zt_edit, t_i, t, fwd_noises)
 
-            for k in range(n_avg):
-                                    
-
-                fwd_noise = torch.randn_like(x_src_packed).to(x_src_packed.device)
-                
-                zt_src = (1-t_i)*x_src_packed + (t_i)*fwd_noise
-
-                zt_tar = zt_edit + zt_src - x_src_packed
-
-                # Merge in the future to avoid double computation
-                Vt_src = calc_v_flux(pipe,
-                                                    latents=zt_src,
-                                                    prompt_embeds=src_prompt_embeds, 
-                                                    pooled_prompt_embeds=src_pooled_prompt_embeds, 
-                                                    guidance=src_guidance,
-                                                    text_ids=src_text_ids, 
-                                                    latent_image_ids=latent_src_image_ids, 
-                                                    t=t)
-                
-                Vt_tar = calc_v_flux(pipe,
-                                                    latents=zt_tar,
-                                                    prompt_embeds=tar_prompt_embeds, 
-                                                    pooled_prompt_embeds=tar_pooled_prompt_embeds, 
-                                                    guidance=tar_guidance,
-                                                    text_ids=tar_text_ids, 
-                                                    latent_image_ids=latent_tar_image_ids, 
-                                                    t=t)
-
-                V_delta_avg += (1/n_avg) * (Vt_tar - Vt_src) # - (hfg-1)*( x_src))
+            if solver_type == "midpoint":
+                zt_mid = (zt_edit.to(torch.float32) + 0.5 * dt * V_delta_avg).to(V_delta_avg.dtype)
+                V_delta_avg = flowedit_delta(zt_mid, sigma_mid, t_mid, fwd_noises)
 
             # propagate direct ODE
             zt_edit = zt_edit.to(torch.float32)
 
-            zt_edit = zt_edit + (t_im1 - t_i) * V_delta_avg
+            zt_edit = zt_edit + dt * V_delta_avg
 
             zt_edit = zt_edit.to(V_delta_avg.dtype)
 
@@ -381,19 +452,15 @@ def FlowEditFLUX(pipe,
                 xt_src = scale_noise(scheduler, x_src_packed, t, noise=fwd_noise)
                 xt_tar = zt_edit + xt_src - x_src_packed
                 
-            Vt_tar = calc_v_flux(pipe,
-                                    latents=xt_tar,
-                                    prompt_embeds=tar_prompt_embeds, 
-                                    pooled_prompt_embeds=tar_pooled_prompt_embeds, 
-                                    guidance=tar_guidance,
-                                    text_ids=tar_text_ids, 
-                                    latent_image_ids=latent_tar_image_ids, 
-                                    t=t)
+            Vt_tar = target_velocity(xt_tar, t)
 
+            if solver_type == "midpoint":
+                xt_mid = (xt_tar.to(torch.float32) + 0.5 * dt * Vt_tar).to(Vt_tar.dtype)
+                Vt_tar = target_velocity(xt_mid, t_mid)
 
             xt_tar = xt_tar.to(torch.float32)
 
-            prev_sample = xt_tar + (t_im1 - t_i) * (Vt_tar)
+            prev_sample = xt_tar + dt * (Vt_tar)
 
             prev_sample = prev_sample.to(Vt_tar.dtype)
             xt_tar = prev_sample

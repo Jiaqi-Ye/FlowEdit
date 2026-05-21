@@ -3,6 +3,7 @@
   dataset_yaml: edits.yaml
   model_type: "SD3"
   sampler_type: "FlowEditSD3"
+  solver_type: "midpoint"
   T_steps: 50
   n_avg: 1
   src_guidance_scale: 3.5

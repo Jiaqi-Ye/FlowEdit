@@ -7,6 +7,8 @@ import random
 import numpy as np
 import yaml
 import os
+import csv
+import time
 from FlowEdit_utils import FlowEditSD3, FlowEditFLUX
 
 
@@ -32,15 +34,18 @@ if __name__ == "__main__":
     model_type = exp_configs[0]["model_type"] # currently only one model type per run
 
     if model_type == 'FLUX':
-        # pipe = FluxPipeline.from_pretrained("black-forest-labs/FLUX.1-schnell", torch_dtype=torch.float16) 
-        pipe = FluxPipeline.from_pretrained("black-forest-labs/FLUX.1-dev", torch_dtype=torch.float16)
+        # default keeps original behavior, but allows overriding from yaml for Colab usage
+        model_id = exp_configs[0].get("model_id", "black-forest-labs/FLUX.1-dev")
+        pipe = FluxPipeline.from_pretrained(model_id, torch_dtype=torch.float16)
     elif model_type == 'SD3':
-        pipe = StableDiffusion3Pipeline.from_pretrained("stabilityai/stable-diffusion-3-medium-diffusers", torch_dtype=torch.float16)
+        model_id = exp_configs[0].get("model_id", "stabilityai/stable-diffusion-3-medium-diffusers")
+        pipe = StableDiffusion3Pipeline.from_pretrained(model_id, torch_dtype=torch.float16)
     else:
         raise NotImplementedError(f"Model type {model_type} not implemented")
     
     scheduler = pipe.scheduler
     pipe = pipe.to(device)
+    run_summaries = []
 
     for exp_dict in exp_configs:
 
@@ -52,6 +57,7 @@ if __name__ == "__main__":
         tar_guidance_scale = exp_dict["tar_guidance_scale"]
         n_min = exp_dict["n_min"]
         n_max = exp_dict["n_max"]
+        solver_type = exp_dict.get("solver_type", "euler")
         seed = exp_dict["seed"]
 
         # set seed
@@ -89,6 +95,8 @@ if __name__ == "__main__":
             
             for tar_num, tar_prompt in enumerate(tar_prompts):
 
+                start_time = time.perf_counter()
+
                 if model_type == 'SD3':
                     x0_tar = FlowEditSD3(pipe,
                                                             scheduler,
@@ -101,7 +109,8 @@ if __name__ == "__main__":
                                                             src_guidance_scale,
                                                             tar_guidance_scale,
                                                             n_min,
-                                                            n_max,)
+                                                            n_max,
+                                                            solver_type,)
                     
                 elif model_type == 'FLUX':
                     x0_tar = FlowEditFLUX(pipe,
@@ -115,10 +124,10 @@ if __name__ == "__main__":
                                                             src_guidance_scale,
                                                             tar_guidance_scale,
                                                             n_min,
-                                                            n_max,)
+                                                            n_max,
+                                                            solver_type,)
                 else:
                     raise NotImplementedError(f"Sampler type {model_type} not implemented")
-
 
                 x0_tar_denorm = (x0_tar / pipe.vae.config.scaling_factor) + pipe.vae.config.shift_factor
                 with torch.autocast("cuda"), torch.inference_mode():
@@ -133,17 +142,45 @@ if __name__ == "__main__":
                 save_dir = f"outputs/{exp_name}/{model_type}/src_{src_prompt_txt}/tar_{tar_prompt_txt}"
                 os.makedirs(save_dir, exist_ok=True)
                 
-                image_tar[0].save(f"{save_dir}/output_T_steps_{T_steps}_n_avg_{n_avg}_cfg_enc_{src_guidance_scale}_cfg_dec{tar_guidance_scale}_n_min_{n_min}_n_max_{n_max}_seed{seed}.png")
+                image_tar[0].save(f"{save_dir}/output_solver_{solver_type}_T_steps_{T_steps}_n_avg_{n_avg}_cfg_enc_{src_guidance_scale}_cfg_dec{tar_guidance_scale}_n_min_{n_min}_n_max_{n_max}_seed{seed}.png")
+                elapsed_seconds = time.perf_counter() - start_time
+                run_summaries.append({
+                    "exp_name": exp_name,
+                    "model_type": model_type,
+                    "solver_type": solver_type,
+                    "source_image": image_src_path,
+                    "target_index": tar_num,
+                    "T_steps": T_steps,
+                    "n_avg": n_avg,
+                    "src_guidance_scale": src_guidance_scale,
+                    "tar_guidance_scale": tar_guidance_scale,
+                    "n_min": n_min,
+                    "n_max": n_max,
+                    "seed": seed,
+                    "elapsed_seconds": f"{elapsed_seconds:.3f}",
+                    "output_dir": save_dir,
+                })
                 # also save source and target prompt in txt file
                 with open(f"{save_dir}/prompts.txt", "w") as f:
                     f.write(f"Source prompt: {src_prompt}\n")
                     f.write(f"Target prompt: {tar_prompt}\n")
                     f.write(f"Seed: {seed}\n")
                     f.write(f"Sampler type: {model_type}\n")
+                    f.write(f"Solver type: {solver_type}\n")
+                    f.write(f"Runtime seconds: {elapsed_seconds:.3f}\n")
                 
 
 
 
+
+    if run_summaries:
+        summary_path = "outputs/run_summary.csv"
+        os.makedirs(os.path.dirname(summary_path), exist_ok=True)
+        with open(summary_path, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=run_summaries[0].keys())
+            writer.writeheader()
+            writer.writerows(run_summaries)
+        print(f"Wrote runtime summary to {summary_path}")
 
     print("Done")
 
