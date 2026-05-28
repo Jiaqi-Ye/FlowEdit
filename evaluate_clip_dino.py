@@ -123,12 +123,16 @@ def main():
             row_out = {
                 "exp_name": row["exp_name"],
                 "solver_type": row["solver_type"],
+                "estimated_nfe": row.get("estimated_nfe", ""),
+                "pc_guidance_lambda": row.get("pc_guidance_lambda", ""),
+                "pc_guidance_gamma": row.get("pc_guidance_gamma", ""),
                 "source_image": source_image_path,
                 "target_index": target_index,
                 "elapsed_seconds": row["elapsed_seconds"],
                 "output_image": output_image_path,
                 "clip_alignment": f"{clip_score:.6f}",
                 "dino_similarity": f"{dino_score:.6f}",
+                "edit_preservation_score": f"{(clip_score * dino_score):.6f}",
             }
             per_sample_rows.append(row_out)
 
@@ -145,21 +149,32 @@ def main():
 
     grouped = {}
     for row in per_sample_rows:
-        key = (row["exp_name"], row["solver_type"])
-        grouped.setdefault(key, {"clip": [], "dino": [], "time": []})
+        key = (
+            row["exp_name"],
+            row["solver_type"],
+            row["estimated_nfe"],
+            row["pc_guidance_lambda"],
+            row["pc_guidance_gamma"],
+        )
+        grouped.setdefault(key, {"clip": [], "dino": [], "score": [], "time": []})
         grouped[key]["clip"].append(float(row["clip_alignment"]))
         grouped[key]["dino"].append(float(row["dino_similarity"]))
+        grouped[key]["score"].append(float(row["edit_preservation_score"]))
         grouped[key]["time"].append(float(row["elapsed_seconds"]))
 
     summary_rows = []
-    for (exp_name, solver_type), vals in grouped.items():
+    for (exp_name, solver_type, estimated_nfe, pc_guidance_lambda, pc_guidance_gamma), vals in grouped.items():
         summary_rows.append(
             {
                 "exp_name": exp_name,
                 "solver_type": solver_type,
+                "estimated_nfe": estimated_nfe,
+                "pc_guidance_lambda": pc_guidance_lambda,
+                "pc_guidance_gamma": pc_guidance_gamma,
                 "num_samples": len(vals["clip"]),
                 "clip_alignment_mean": f"{mean(vals['clip']):.6f}",
                 "dino_similarity_mean": f"{mean(vals['dino']):.6f}",
+                "edit_preservation_score_mean": f"{mean(vals['score']):.6f}",
                 "elapsed_seconds_mean": f"{mean(vals['time']):.3f}",
             }
         )

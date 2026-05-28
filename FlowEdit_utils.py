@@ -52,9 +52,19 @@ def calculate_shift(
 
 def normalize_solver_type(solver_type: str) -> str:
     solver_type = solver_type.lower()
-    if solver_type in {"euler", "midpoint"}:
+    if solver_type == "flowedit_pc":
+        return "flowedit_pc_additive"
+    if solver_type in {"euler", "midpoint", "flowedit_pc_additive"}:
         return solver_type
-    raise ValueError(f"Unsupported solver_type: {solver_type}. Use 'euler' or 'midpoint'.")
+    raise ValueError(
+        f"Unsupported solver_type: {solver_type}. "
+        "Use 'euler', 'midpoint', or 'flowedit_pc_additive'."
+    )
+
+
+def rectified_flowedit_alpha(t, lambda_: float = 1.0, gamma: float = 1.0):
+    """Time-scheduled correction weight alpha(t)=lambda*(1-t)^gamma."""
+    return lambda_ * (1 - t).clamp_min(0) ** gamma
 
 
 def velocity_to_score(x, v, t, eps: float = 1e-5):
@@ -138,7 +148,9 @@ def FlowEditSD3(pipe,
     tar_guidance_scale: float = 13.5,
     n_min: int = 0,
     n_max: int = 15,
-    solver_type: str = "euler",):
+    solver_type: str = "euler",
+    pc_guidance_lambda: float = 1.0,
+    pc_guidance_gamma: float = 1.0,):
     
     device = x_src.device
     solver_type = normalize_solver_type(solver_type)
@@ -208,6 +220,43 @@ def FlowEditSD3(pipe,
             V_delta_avg += (1/n_avg) * (Vt_tar - Vt_src)
         return V_delta_avg
 
+    def flowedit_pc_additive_delta(z_edit, t_unit, t_model, t_mid_unit, t_mid_model, dt, noises):
+        V_hat_avg = torch.zeros_like(x_src)
+        alpha = rectified_flowedit_alpha(t_unit, pc_guidance_lambda, pc_guidance_gamma)
+        for fwd_noise in noises:
+            zt_src = (1-t_unit)*x_src + (t_unit)*fwd_noise
+            zt_tar = z_edit + zt_src - x_src
+
+            src_tar_latent_model_input = torch.cat([zt_src, zt_src, zt_tar, zt_tar])
+            Vt_src, Vt_tar = calc_v_sd3(
+                pipe,
+                src_tar_latent_model_input,
+                src_tar_prompt_embeds,
+                src_tar_pooled_prompt_embeds,
+                src_guidance_scale,
+                tar_guidance_scale,
+                t_model,
+            )
+
+            V_delta = Vt_tar - Vt_src
+            zt_src_mid = (zt_src.to(torch.float32) + 0.5 * dt * Vt_src).to(Vt_src.dtype)
+            zt_tar_mid = (zt_tar.to(torch.float32) + 0.5 * dt * Vt_tar).to(Vt_tar.dtype)
+
+            src_tar_mid_latent_model_input = torch.cat([zt_src_mid, zt_src_mid, zt_tar_mid, zt_tar_mid])
+            Vt_src_mid, Vt_tar_mid = calc_v_sd3(
+                pipe,
+                src_tar_mid_latent_model_input,
+                src_tar_prompt_embeds,
+                src_tar_pooled_prompt_embeds,
+                src_guidance_scale,
+                tar_guidance_scale,
+                t_mid_model,
+            )
+
+            V_delta_mid = Vt_tar_mid - Vt_src_mid
+            V_hat_avg += (1/n_avg) * (V_delta + alpha * V_delta_mid)
+        return V_hat_avg
+
     def target_velocity(z_tar, t_model):
         src_tar_latent_model_input = torch.cat([z_tar, z_tar, z_tar, z_tar])
         _, Vt_tar = calc_v_sd3(
@@ -240,7 +289,18 @@ def FlowEditSD3(pipe,
         if T_steps - i > n_min:
 
             fwd_noises = [torch.randn_like(x_src).to(x_src.device) for _ in range(n_avg)]
-            V_delta_avg = flowedit_delta(zt_edit, t_i, t, fwd_noises)
+            if solver_type == "flowedit_pc_additive":
+                V_delta_avg = flowedit_pc_additive_delta(
+                    zt_edit,
+                    t_i,
+                    t,
+                    t_mid_i,
+                    t_mid,
+                    dt,
+                    fwd_noises,
+                )
+            else:
+                V_delta_avg = flowedit_delta(zt_edit, t_i, t, fwd_noises)
 
             if solver_type == "midpoint":
                 zt_mid = (zt_edit.to(torch.float32) + 0.5 * dt * V_delta_avg).to(V_delta_avg.dtype)
@@ -292,7 +352,9 @@ def FlowEditFLUX(pipe,
     tar_guidance_scale: float = 5.5,
     n_min: int = 0,
     n_max: int = 24,
-    solver_type: str = "euler",):
+    solver_type: str = "euler",
+    pc_guidance_lambda: float = 1.0,
+    pc_guidance_gamma: float = 1.0,):
 
     device = x_src.device
     solver_type = normalize_solver_type(solver_type)
@@ -399,6 +461,57 @@ def FlowEditFLUX(pipe,
             V_delta_avg += (1/n_avg) * (Vt_tar - Vt_src)
         return V_delta_avg
 
+    def flowedit_pc_additive_delta(z_edit, sigma, t_model, sigma_mid, t_mid_model, dt, noises):
+        V_hat_avg = torch.zeros_like(x_src_packed)
+        alpha = rectified_flowedit_alpha(sigma, pc_guidance_lambda, pc_guidance_gamma)
+        for fwd_noise in noises:
+            zt_src = (1-sigma)*x_src_packed + (sigma)*fwd_noise
+            zt_tar = z_edit + zt_src - x_src_packed
+
+            Vt_src = calc_v_flux(pipe,
+                                                latents=zt_src,
+                                                prompt_embeds=src_prompt_embeds,
+                                                pooled_prompt_embeds=src_pooled_prompt_embeds,
+                                                guidance=src_guidance,
+                                                text_ids=src_text_ids,
+                                                latent_image_ids=latent_src_image_ids,
+                                                t=t_model)
+
+            Vt_tar = calc_v_flux(pipe,
+                                                latents=zt_tar,
+                                                prompt_embeds=tar_prompt_embeds,
+                                                pooled_prompt_embeds=tar_pooled_prompt_embeds,
+                                                guidance=tar_guidance,
+                                                text_ids=tar_text_ids,
+                                                latent_image_ids=latent_tar_image_ids,
+                                                t=t_model)
+
+            V_delta = Vt_tar - Vt_src
+            zt_src_mid = (zt_src.to(torch.float32) + 0.5 * dt * Vt_src).to(Vt_src.dtype)
+            zt_tar_mid = (zt_tar.to(torch.float32) + 0.5 * dt * Vt_tar).to(Vt_tar.dtype)
+
+            Vt_src_mid = calc_v_flux(pipe,
+                                                latents=zt_src_mid,
+                                                prompt_embeds=src_prompt_embeds,
+                                                pooled_prompt_embeds=src_pooled_prompt_embeds,
+                                                guidance=src_guidance,
+                                                text_ids=src_text_ids,
+                                                latent_image_ids=latent_src_image_ids,
+                                                t=t_mid_model)
+
+            Vt_tar_mid = calc_v_flux(pipe,
+                                                latents=zt_tar_mid,
+                                                prompt_embeds=tar_prompt_embeds,
+                                                pooled_prompt_embeds=tar_pooled_prompt_embeds,
+                                                guidance=tar_guidance,
+                                                text_ids=tar_text_ids,
+                                                latent_image_ids=latent_tar_image_ids,
+                                                t=t_mid_model)
+
+            V_delta_mid = Vt_tar_mid - Vt_src_mid
+            V_hat_avg += (1/n_avg) * (V_delta + alpha * V_delta_mid)
+        return V_hat_avg
+
     def target_velocity(z_tar, t_model):
         return calc_v_flux(pipe,
                             latents=z_tar,
@@ -431,7 +544,18 @@ def FlowEditFLUX(pipe,
         if T_steps - i > n_min:
 
             fwd_noises = [torch.randn_like(x_src_packed).to(x_src_packed.device) for _ in range(n_avg)]
-            V_delta_avg = flowedit_delta(zt_edit, t_i, t, fwd_noises)
+            if solver_type == "flowedit_pc_additive":
+                V_delta_avg = flowedit_pc_additive_delta(
+                    zt_edit,
+                    t_i,
+                    t,
+                    sigma_mid,
+                    t_mid,
+                    dt,
+                    fwd_noises,
+                )
+            else:
+                V_delta_avg = flowedit_delta(zt_edit, t_i, t, fwd_noises)
 
             if solver_type == "midpoint":
                 zt_mid = (zt_edit.to(torch.float32) + 0.5 * dt * V_delta_avg).to(V_delta_avg.dtype)

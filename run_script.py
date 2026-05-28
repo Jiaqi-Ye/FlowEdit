@@ -12,6 +12,14 @@ import time
 from FlowEdit_utils import FlowEditSD3, FlowEditFLUX
 
 
+def estimate_flowedit_nfe(T_steps, n_min, n_max, n_avg, solver_type):
+    edit_steps = max(min(n_max, T_steps) - max(n_min, 0), 0)
+    final_steps = min(max(n_min, 0), T_steps)
+    edit_calls_per_step = 2 if solver_type in {"midpoint", "flowedit_pc_additive", "flowedit_pc"} else 1
+    final_calls_per_step = 2 if solver_type == "midpoint" else 1
+    return edit_steps * n_avg * edit_calls_per_step + final_steps * final_calls_per_step
+
+
 
 if __name__ == "__main__":
 
@@ -58,6 +66,9 @@ if __name__ == "__main__":
         n_min = exp_dict["n_min"]
         n_max = exp_dict["n_max"]
         solver_type = exp_dict.get("solver_type", "euler")
+        pc_guidance_lambda = exp_dict.get("pc_guidance_lambda", 1.0)
+        pc_guidance_gamma = exp_dict.get("pc_guidance_gamma", 1.0)
+        estimated_nfe = estimate_flowedit_nfe(T_steps, n_min, n_max, n_avg, solver_type)
         seed = exp_dict["seed"]
 
         # set seed
@@ -110,7 +121,9 @@ if __name__ == "__main__":
                                                             tar_guidance_scale,
                                                             n_min,
                                                             n_max,
-                                                            solver_type,)
+                                                            solver_type,
+                                                            pc_guidance_lambda=pc_guidance_lambda,
+                                                            pc_guidance_gamma=pc_guidance_gamma,)
                     
                 elif model_type == 'FLUX':
                     x0_tar = FlowEditFLUX(pipe,
@@ -125,7 +138,9 @@ if __name__ == "__main__":
                                                             tar_guidance_scale,
                                                             n_min,
                                                             n_max,
-                                                            solver_type,)
+                                                            solver_type,
+                                                            pc_guidance_lambda=pc_guidance_lambda,
+                                                            pc_guidance_gamma=pc_guidance_gamma,)
                 else:
                     raise NotImplementedError(f"Sampler type {model_type} not implemented")
 
@@ -156,6 +171,9 @@ if __name__ == "__main__":
                     "tar_guidance_scale": tar_guidance_scale,
                     "n_min": n_min,
                     "n_max": n_max,
+                    "estimated_nfe": estimated_nfe,
+                    "pc_guidance_lambda": pc_guidance_lambda,
+                    "pc_guidance_gamma": pc_guidance_gamma,
                     "seed": seed,
                     "negative_prompt": negative_prompt,
                     "elapsed_seconds": f"{elapsed_seconds:.3f}",
@@ -169,6 +187,9 @@ if __name__ == "__main__":
                     f.write(f"Seed: {seed}\n")
                     f.write(f"Sampler type: {model_type}\n")
                     f.write(f"Solver type: {solver_type}\n")
+                    f.write(f"Estimated NFE: {estimated_nfe}\n")
+                    f.write(f"PC guidance lambda: {pc_guidance_lambda}\n")
+                    f.write(f"PC guidance gamma: {pc_guidance_gamma}\n")
                     f.write(f"Runtime seconds: {elapsed_seconds:.3f}\n")
                 
 
