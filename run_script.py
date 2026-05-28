@@ -15,7 +15,14 @@ from FlowEdit_utils import FlowEditSD3, FlowEditFLUX
 def estimate_flowedit_nfe(T_steps, n_min, n_max, n_avg, solver_type):
     edit_steps = max(min(n_max, T_steps) - max(n_min, 0), 0)
     final_steps = min(max(n_min, 0), T_steps)
-    edit_calls_per_step = 2 if solver_type in {"midpoint", "flowedit_pc_additive", "flowedit_pc"} else 1
+    edit_calls_per_step = 2 if solver_type in {
+        "midpoint",
+        "flowedit_pc_additive",
+        "flowedit_pc",
+        "flowedit_pc_interpolate",
+        "flowedit_pc_interp",
+        "flowedit_pc_interpolation",
+    } else 1
     final_calls_per_step = 2 if solver_type == "midpoint" else 1
     return edit_steps * n_avg * edit_calls_per_step + final_steps * final_calls_per_step
 
