@@ -56,17 +56,31 @@ def normalize_solver_type(solver_type: str) -> str:
         return "flowedit_pc_additive"
     if solver_type in {"flowedit_pc_interp", "flowedit_pc_interpolation"}:
         return "flowedit_pc_interpolate"
-    if solver_type in {"euler", "midpoint", "flowedit_pc_additive", "flowedit_pc_interpolate"}:
+    if solver_type in {"flowedit_cfg_interp", "flowedit_cfg_interpolate", "flowedit_cfg_like_interp"}:
+        return "flowedit_cfg_like_interpolate"
+    if solver_type in {
+        "euler",
+        "midpoint",
+        "flowedit_pc_additive",
+        "flowedit_pc_interpolate",
+        "flowedit_cfg_like_interpolate",
+    }:
         return solver_type
     raise ValueError(
         f"Unsupported solver_type: {solver_type}. "
-        "Use 'euler', 'midpoint', 'flowedit_pc_additive', or 'flowedit_pc_interpolate'."
+        "Use 'euler', 'midpoint', 'flowedit_pc_additive', "
+        "'flowedit_pc_interpolate', or 'flowedit_cfg_like_interpolate'."
     )
 
 
 def rectified_flowedit_alpha(t, lambda_: float = 1.0, gamma: float = 1.0):
     """Time-scheduled correction weight alpha(t)=lambda*(1-t)^gamma."""
     return lambda_ * (1 - t).clamp_min(0) ** gamma
+
+
+def flowedit_cfg_like_contrast(v_tar, v_src):
+    """CFG-like FlowEdit field: target velocity plus negative source velocity."""
+    return v_tar + (-v_src)
 
 
 def velocity_to_score(x, v, t, eps: float = 1e-5):
@@ -219,7 +233,7 @@ def FlowEditSD3(pipe,
                 t_model,
             )
 
-            V_delta_avg += (1/n_avg) * (Vt_tar - Vt_src)
+            V_delta_avg += (1/n_avg) * flowedit_cfg_like_contrast(Vt_tar, Vt_src)
         return V_delta_avg
 
     def flowedit_pc_delta(z_edit, t_unit, t_model, t_mid_unit, t_mid_model, dt, noises, combine_mode):
@@ -240,7 +254,7 @@ def FlowEditSD3(pipe,
                 t_model,
             )
 
-            V_delta = Vt_tar - Vt_src
+            V_delta = flowedit_cfg_like_contrast(Vt_tar, Vt_src)
             zt_src_mid = (zt_src.to(torch.float32) + 0.5 * dt * Vt_src).to(Vt_src.dtype)
             zt_tar_mid = (zt_tar.to(torch.float32) + 0.5 * dt * Vt_tar).to(Vt_tar.dtype)
 
@@ -255,10 +269,12 @@ def FlowEditSD3(pipe,
                 t_mid_model,
             )
 
-            V_delta_mid = Vt_tar_mid - Vt_src_mid
+            V_delta_mid = flowedit_cfg_like_contrast(Vt_tar_mid, Vt_src_mid)
             if combine_mode == "additive":
                 V_hat = V_delta + alpha * V_delta_mid
             elif combine_mode == "interpolate":
+                V_hat = (1 - alpha) * V_delta + alpha * V_delta_mid
+            elif combine_mode == "cfg_like_interpolate":
                 V_hat = (1 - alpha) * V_delta + alpha * V_delta_mid
             else:
                 raise ValueError(f"Unsupported FlowEdit PC combine_mode: {combine_mode}")
@@ -297,7 +313,7 @@ def FlowEditSD3(pipe,
         if T_steps - i > n_min:
 
             fwd_noises = [torch.randn_like(x_src).to(x_src.device) for _ in range(n_avg)]
-            if solver_type in {"flowedit_pc_additive", "flowedit_pc_interpolate"}:
+            if solver_type in {"flowedit_pc_additive", "flowedit_pc_interpolate", "flowedit_cfg_like_interpolate"}:
                 V_delta_avg = flowedit_pc_delta(
                     zt_edit,
                     t_i,
@@ -306,7 +322,11 @@ def FlowEditSD3(pipe,
                     t_mid,
                     dt,
                     fwd_noises,
-                    "interpolate" if solver_type == "flowedit_pc_interpolate" else "additive",
+                    "cfg_like_interpolate"
+                    if solver_type == "flowedit_cfg_like_interpolate"
+                    else "interpolate"
+                    if solver_type == "flowedit_pc_interpolate"
+                    else "additive",
                 )
             else:
                 V_delta_avg = flowedit_delta(zt_edit, t_i, t, fwd_noises)
@@ -467,7 +487,7 @@ def FlowEditFLUX(pipe,
                                                 latent_image_ids=latent_tar_image_ids,
                                                 t=t_model)
 
-            V_delta_avg += (1/n_avg) * (Vt_tar - Vt_src)
+            V_delta_avg += (1/n_avg) * flowedit_cfg_like_contrast(Vt_tar, Vt_src)
         return V_delta_avg
 
     def flowedit_pc_delta(z_edit, sigma, t_model, sigma_mid, t_mid_model, dt, noises, combine_mode):
@@ -495,7 +515,7 @@ def FlowEditFLUX(pipe,
                                                 latent_image_ids=latent_tar_image_ids,
                                                 t=t_model)
 
-            V_delta = Vt_tar - Vt_src
+            V_delta = flowedit_cfg_like_contrast(Vt_tar, Vt_src)
             zt_src_mid = (zt_src.to(torch.float32) + 0.5 * dt * Vt_src).to(Vt_src.dtype)
             zt_tar_mid = (zt_tar.to(torch.float32) + 0.5 * dt * Vt_tar).to(Vt_tar.dtype)
 
@@ -517,10 +537,12 @@ def FlowEditFLUX(pipe,
                                                 latent_image_ids=latent_tar_image_ids,
                                                 t=t_mid_model)
 
-            V_delta_mid = Vt_tar_mid - Vt_src_mid
+            V_delta_mid = flowedit_cfg_like_contrast(Vt_tar_mid, Vt_src_mid)
             if combine_mode == "additive":
                 V_hat = V_delta + alpha * V_delta_mid
             elif combine_mode == "interpolate":
+                V_hat = (1 - alpha) * V_delta + alpha * V_delta_mid
+            elif combine_mode == "cfg_like_interpolate":
                 V_hat = (1 - alpha) * V_delta + alpha * V_delta_mid
             else:
                 raise ValueError(f"Unsupported FlowEdit PC combine_mode: {combine_mode}")
@@ -559,7 +581,7 @@ def FlowEditFLUX(pipe,
         if T_steps - i > n_min:
 
             fwd_noises = [torch.randn_like(x_src_packed).to(x_src_packed.device) for _ in range(n_avg)]
-            if solver_type in {"flowedit_pc_additive", "flowedit_pc_interpolate"}:
+            if solver_type in {"flowedit_pc_additive", "flowedit_pc_interpolate", "flowedit_cfg_like_interpolate"}:
                 V_delta_avg = flowedit_pc_delta(
                     zt_edit,
                     t_i,
@@ -568,7 +590,11 @@ def FlowEditFLUX(pipe,
                     t_mid,
                     dt,
                     fwd_noises,
-                    "interpolate" if solver_type == "flowedit_pc_interpolate" else "additive",
+                    "cfg_like_interpolate"
+                    if solver_type == "flowedit_cfg_like_interpolate"
+                    else "interpolate"
+                    if solver_type == "flowedit_pc_interpolate"
+                    else "additive",
                 )
             else:
                 V_delta_avg = flowedit_delta(zt_edit, t_i, t, fwd_noises)
