@@ -26,6 +26,9 @@ def estimate_flowedit_nfe(T_steps, n_min, n_max, n_avg, solver_type):
         "flowedit_cfg_like_interp",
         "flowedit_cfg_interpolate",
         "flowedit_cfg_interp",
+        "flowedit_cfgpp_no_first_term",
+        "flowedit_cfgpp_no_first",
+        "flowedit_remove_cfgpp_first_term",
     } else 1
     final_calls_per_step = 2 if solver_type == "midpoint" else 1
     return edit_steps * n_avg * edit_calls_per_step + final_steps * final_calls_per_step

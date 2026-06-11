@@ -59,17 +59,25 @@ def normalize_solver_type(solver_type: str) -> str:
     if solver_type in {"flowedit_cfg_interp", "flowedit_cfg_interpolate", "flowedit_cfg_like_interp"}:
         return "flowedit_cfg_like_interpolate"
     if solver_type in {
+        "flowedit_cfgpp_no_first",
+        "flowedit_cfgpp_no_first_term",
+        "flowedit_remove_cfgpp_first_term",
+    }:
+        return "flowedit_cfgpp_no_first_term"
+    if solver_type in {
         "euler",
         "midpoint",
         "flowedit_pc_additive",
         "flowedit_pc_interpolate",
         "flowedit_cfg_like_interpolate",
+        "flowedit_cfgpp_no_first_term",
     }:
         return solver_type
     raise ValueError(
         f"Unsupported solver_type: {solver_type}. "
         "Use 'euler', 'midpoint', 'flowedit_pc_additive', "
-        "'flowedit_pc_interpolate', or 'flowedit_cfg_like_interpolate'."
+        "'flowedit_pc_interpolate', 'flowedit_cfg_like_interpolate', "
+        "or 'flowedit_cfgpp_no_first_term'."
     )
 
 
@@ -277,6 +285,8 @@ def FlowEditSD3(pipe,
                 V_hat = (1 - alpha) * V_delta + alpha * V_delta_mid
             elif combine_mode == "cfg_like_interpolate":
                 V_hat = V_delta + alpha * (pc_guidance_weight * V_delta_mid - V_delta)
+            elif combine_mode == "cfgpp_no_first_term":
+                V_hat = alpha * pc_guidance_weight * V_delta_mid
             else:
                 raise ValueError(f"Unsupported FlowEdit PC combine_mode: {combine_mode}")
             V_hat_avg += (1/n_avg) * V_hat
@@ -314,7 +324,12 @@ def FlowEditSD3(pipe,
         if T_steps - i > n_min:
 
             fwd_noises = [torch.randn_like(x_src).to(x_src.device) for _ in range(n_avg)]
-            if solver_type in {"flowedit_pc_additive", "flowedit_pc_interpolate", "flowedit_cfg_like_interpolate"}:
+            if solver_type in {
+                "flowedit_pc_additive",
+                "flowedit_pc_interpolate",
+                "flowedit_cfg_like_interpolate",
+                "flowedit_cfgpp_no_first_term",
+            }:
                 V_delta_avg = flowedit_pc_delta(
                     zt_edit,
                     t_i,
@@ -325,6 +340,8 @@ def FlowEditSD3(pipe,
                     fwd_noises,
                     "cfg_like_interpolate"
                     if solver_type == "flowedit_cfg_like_interpolate"
+                    else "cfgpp_no_first_term"
+                    if solver_type == "flowedit_cfgpp_no_first_term"
                     else "interpolate"
                     if solver_type == "flowedit_pc_interpolate"
                     else "additive",
@@ -546,6 +563,8 @@ def FlowEditFLUX(pipe,
                 V_hat = (1 - alpha) * V_delta + alpha * V_delta_mid
             elif combine_mode == "cfg_like_interpolate":
                 V_hat = V_delta + alpha * (pc_guidance_weight * V_delta_mid - V_delta)
+            elif combine_mode == "cfgpp_no_first_term":
+                V_hat = alpha * pc_guidance_weight * V_delta_mid
             else:
                 raise ValueError(f"Unsupported FlowEdit PC combine_mode: {combine_mode}")
             V_hat_avg += (1/n_avg) * V_hat
@@ -583,7 +602,12 @@ def FlowEditFLUX(pipe,
         if T_steps - i > n_min:
 
             fwd_noises = [torch.randn_like(x_src_packed).to(x_src_packed.device) for _ in range(n_avg)]
-            if solver_type in {"flowedit_pc_additive", "flowedit_pc_interpolate", "flowedit_cfg_like_interpolate"}:
+            if solver_type in {
+                "flowedit_pc_additive",
+                "flowedit_pc_interpolate",
+                "flowedit_cfg_like_interpolate",
+                "flowedit_cfgpp_no_first_term",
+            }:
                 V_delta_avg = flowedit_pc_delta(
                     zt_edit,
                     t_i,
@@ -594,6 +618,8 @@ def FlowEditFLUX(pipe,
                     fwd_noises,
                     "cfg_like_interpolate"
                     if solver_type == "flowedit_cfg_like_interpolate"
+                    else "cfgpp_no_first_term"
+                    if solver_type == "flowedit_cfgpp_no_first_term"
                     else "interpolate"
                     if solver_type == "flowedit_pc_interpolate"
                     else "additive",
