@@ -79,6 +79,7 @@ if __name__ == "__main__":
         solver_type = exp_dict.get("solver_type", "euler")
         pc_guidance_lambda = exp_dict.get("pc_guidance_lambda", 1.0)
         pc_guidance_gamma = exp_dict.get("pc_guidance_gamma", 1.0)
+        pc_guidance_weight = exp_dict.get("pc_guidance_weight", 1.0)
         estimated_nfe = estimate_flowedit_nfe(T_steps, n_min, n_max, n_avg, solver_type)
         seed = exp_dict["seed"]
 
@@ -134,7 +135,8 @@ if __name__ == "__main__":
                                                             n_max,
                                                             solver_type,
                                                             pc_guidance_lambda=pc_guidance_lambda,
-                                                            pc_guidance_gamma=pc_guidance_gamma,)
+                                                            pc_guidance_gamma=pc_guidance_gamma,
+                                                            pc_guidance_weight=pc_guidance_weight,)
                     
                 elif model_type == 'FLUX':
                     x0_tar = FlowEditFLUX(pipe,
@@ -151,7 +153,8 @@ if __name__ == "__main__":
                                                             n_max,
                                                             solver_type,
                                                             pc_guidance_lambda=pc_guidance_lambda,
-                                                            pc_guidance_gamma=pc_guidance_gamma,)
+                                                            pc_guidance_gamma=pc_guidance_gamma,
+                                                            pc_guidance_weight=pc_guidance_weight,)
                 else:
                     raise NotImplementedError(f"Sampler type {model_type} not implemented")
 
@@ -185,6 +188,7 @@ if __name__ == "__main__":
                     "estimated_nfe": estimated_nfe,
                     "pc_guidance_lambda": pc_guidance_lambda,
                     "pc_guidance_gamma": pc_guidance_gamma,
+                    "pc_guidance_weight": pc_guidance_weight,
                     "seed": seed,
                     "negative_prompt": negative_prompt,
                     "elapsed_seconds": f"{elapsed_seconds:.3f}",
@@ -201,6 +205,7 @@ if __name__ == "__main__":
                     f.write(f"Estimated NFE: {estimated_nfe}\n")
                     f.write(f"PC guidance lambda: {pc_guidance_lambda}\n")
                     f.write(f"PC guidance gamma: {pc_guidance_gamma}\n")
+                    f.write(f"PC guidance weight: {pc_guidance_weight}\n")
                     f.write(f"Runtime seconds: {elapsed_seconds:.3f}\n")
                 
 

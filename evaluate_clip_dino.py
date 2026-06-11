@@ -126,6 +126,7 @@ def main():
                 "estimated_nfe": row.get("estimated_nfe", ""),
                 "pc_guidance_lambda": row.get("pc_guidance_lambda", ""),
                 "pc_guidance_gamma": row.get("pc_guidance_gamma", ""),
+                "pc_guidance_weight": row.get("pc_guidance_weight", ""),
                 "source_image": source_image_path,
                 "target_index": target_index,
                 "elapsed_seconds": row["elapsed_seconds"],
@@ -155,6 +156,7 @@ def main():
             row["estimated_nfe"],
             row["pc_guidance_lambda"],
             row["pc_guidance_gamma"],
+            row["pc_guidance_weight"],
         )
         grouped.setdefault(key, {"clip": [], "dino": [], "score": [], "time": []})
         grouped[key]["clip"].append(float(row["clip_alignment"]))
@@ -163,7 +165,14 @@ def main():
         grouped[key]["time"].append(float(row["elapsed_seconds"]))
 
     summary_rows = []
-    for (exp_name, solver_type, estimated_nfe, pc_guidance_lambda, pc_guidance_gamma), vals in grouped.items():
+    for (
+        exp_name,
+        solver_type,
+        estimated_nfe,
+        pc_guidance_lambda,
+        pc_guidance_gamma,
+        pc_guidance_weight,
+    ), vals in grouped.items():
         summary_rows.append(
             {
                 "exp_name": exp_name,
@@ -171,6 +180,7 @@ def main():
                 "estimated_nfe": estimated_nfe,
                 "pc_guidance_lambda": pc_guidance_lambda,
                 "pc_guidance_gamma": pc_guidance_gamma,
+                "pc_guidance_weight": pc_guidance_weight,
                 "num_samples": len(vals["clip"]),
                 "clip_alignment_mean": f"{mean(vals['clip']):.6f}",
                 "dino_similarity_mean": f"{mean(vals['dino']):.6f}",

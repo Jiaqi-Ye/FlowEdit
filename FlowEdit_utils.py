@@ -166,7 +166,8 @@ def FlowEditSD3(pipe,
     n_max: int = 15,
     solver_type: str = "euler",
     pc_guidance_lambda: float = 1.0,
-    pc_guidance_gamma: float = 1.0,):
+    pc_guidance_gamma: float = 1.0,
+    pc_guidance_weight: float = 1.0,):
     
     device = x_src.device
     solver_type = normalize_solver_type(solver_type)
@@ -275,7 +276,7 @@ def FlowEditSD3(pipe,
             elif combine_mode == "interpolate":
                 V_hat = (1 - alpha) * V_delta + alpha * V_delta_mid
             elif combine_mode == "cfg_like_interpolate":
-                V_hat = (1 - alpha) * V_delta + alpha * V_delta_mid
+                V_hat = V_delta + alpha * (pc_guidance_weight * V_delta_mid - V_delta)
             else:
                 raise ValueError(f"Unsupported FlowEdit PC combine_mode: {combine_mode}")
             V_hat_avg += (1/n_avg) * V_hat
@@ -383,7 +384,8 @@ def FlowEditFLUX(pipe,
     n_max: int = 24,
     solver_type: str = "euler",
     pc_guidance_lambda: float = 1.0,
-    pc_guidance_gamma: float = 1.0,):
+    pc_guidance_gamma: float = 1.0,
+    pc_guidance_weight: float = 1.0,):
 
     device = x_src.device
     solver_type = normalize_solver_type(solver_type)
@@ -543,7 +545,7 @@ def FlowEditFLUX(pipe,
             elif combine_mode == "interpolate":
                 V_hat = (1 - alpha) * V_delta + alpha * V_delta_mid
             elif combine_mode == "cfg_like_interpolate":
-                V_hat = (1 - alpha) * V_delta + alpha * V_delta_mid
+                V_hat = V_delta + alpha * (pc_guidance_weight * V_delta_mid - V_delta)
             else:
                 raise ValueError(f"Unsupported FlowEdit PC combine_mode: {combine_mode}")
             V_hat_avg += (1/n_avg) * V_hat

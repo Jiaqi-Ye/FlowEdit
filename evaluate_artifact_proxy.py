@@ -67,6 +67,7 @@ def main():
                 "estimated_nfe": row.get("estimated_nfe", ""),
                 "pc_guidance_lambda": row.get("pc_guidance_lambda", ""),
                 "pc_guidance_gamma": row.get("pc_guidance_gamma", ""),
+                "pc_guidance_weight": row.get("pc_guidance_weight", ""),
                 "source_image": row["source_image"],
                 "target_index": row["target_index"],
                 "output_image": output_image_path,
@@ -97,6 +98,7 @@ def main():
             row["estimated_nfe"],
             row["pc_guidance_lambda"],
             row["pc_guidance_gamma"],
+            row["pc_guidance_weight"],
         )
         grouped.setdefault(key, {"artifact": [], "delta": [], "clip": [], "sat": []})
         grouped[key]["artifact"].append(float(row["edited_artifact_proxy"]))
@@ -105,7 +107,14 @@ def main():
         grouped[key]["sat"].append(float(row["edited_high_saturation_ratio"]))
 
     summary_rows = []
-    for (exp_name, solver_type, estimated_nfe, pc_guidance_lambda, pc_guidance_gamma), vals in grouped.items():
+    for (
+        exp_name,
+        solver_type,
+        estimated_nfe,
+        pc_guidance_lambda,
+        pc_guidance_gamma,
+        pc_guidance_weight,
+    ), vals in grouped.items():
         summary_rows.append(
             {
                 "exp_name": exp_name,
@@ -113,6 +122,7 @@ def main():
                 "estimated_nfe": estimated_nfe,
                 "pc_guidance_lambda": pc_guidance_lambda,
                 "pc_guidance_gamma": pc_guidance_gamma,
+                "pc_guidance_weight": pc_guidance_weight,
                 "num_samples": len(vals["artifact"]),
                 "edited_artifact_proxy_mean": f"{mean(vals['artifact']):.6f}",
                 "artifact_proxy_delta_vs_source_mean": f"{mean(vals['delta']):.6f}",

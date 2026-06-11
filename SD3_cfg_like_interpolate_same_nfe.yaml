@@ -14,7 +14,7 @@
   seed: 42
 
 -
-  exp_name: "SameNFE_CFGLikeFlowEdit_Interpolate18_L050"
+  exp_name: "SameNFE_CFGLikeFlowEdit_Interpolate18_L050_W100"
   dataset_yaml: edits_midpoint_eval.yaml
   model_type: "SD3"
   model_id: "stabilityai/stable-diffusion-3-medium-diffusers"
@@ -28,4 +28,41 @@
   n_max: 9
   pc_guidance_lambda: 0.5
   pc_guidance_gamma: 1.0
+  pc_guidance_weight: 1.0
+  seed: 42
+
+-
+  exp_name: "SameNFE_CFGLikeFlowEdit_Interpolate18_L050_W125"
+  dataset_yaml: edits_midpoint_eval.yaml
+  model_type: "SD3"
+  model_id: "stabilityai/stable-diffusion-3-medium-diffusers"
+  sampler_type: "FlowEditSD3"
+  solver_type: "flowedit_cfg_like_interpolate"
+  T_steps: 12
+  n_avg: 1
+  src_guidance_scale: 4.5
+  tar_guidance_scale: 7.5
+  n_min: 0
+  n_max: 9
+  pc_guidance_lambda: 0.5
+  pc_guidance_gamma: 1.0
+  pc_guidance_weight: 1.25
+  seed: 42
+
+-
+  exp_name: "SameNFE_CFGLikeFlowEdit_Interpolate18_L050_W150"
+  dataset_yaml: edits_midpoint_eval.yaml
+  model_type: "SD3"
+  model_id: "stabilityai/stable-diffusion-3-medium-diffusers"
+  sampler_type: "FlowEditSD3"
+  solver_type: "flowedit_cfg_like_interpolate"
+  T_steps: 12
+  n_avg: 1
+  src_guidance_scale: 4.5
+  tar_guidance_scale: 7.5
+  n_min: 0
+  n_max: 9
+  pc_guidance_lambda: 0.5
+  pc_guidance_gamma: 1.0
+  pc_guidance_weight: 1.5
   seed: 42
