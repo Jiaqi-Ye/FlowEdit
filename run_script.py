@@ -44,6 +44,9 @@ def estimate_flowedit_nfe(T_steps, n_min, n_max, n_avg, solver_type):
         "flowedit_bridge_directional",
         "flowedit_bridge_direction",
         "flowedit_bridge_dir",
+        "flowedit_bridge_dir_mag",
+        "flowedit_bridge_direction_magnitude",
+        "flowedit_bridge_directional_magnitude",
         "flowedit_cfgpp_no_first_term",
         "flowedit_cfgpp_no_first",
         "flowedit_remove_cfgpp_first_term",
@@ -102,6 +105,12 @@ def describe_flowedit_solver(solver_type: str):
             "theory_formula": "dir(hat G_t)=blend(dir G_t, dir G_mid^bridge), ||hat G_t||=||G_t||",
             "midpoint_space": "shared_noise_bridge",
             "correction_mode": "direction_preserving",
+        },
+        "flowedit_bridge_dir_mag": {
+            "theory_family": "bridge_midpoint_dir_mag",
+            "theory_formula": "dir(hat G_t)=blend(dir G_t, dir G_mid^bridge), ||hat G_t||=clamp-recover(||G_mid^bridge||)",
+            "midpoint_space": "shared_noise_bridge",
+            "correction_mode": "direction_magnitude_decoupled",
         },
     }
     return descriptions[solver_type] | {"normalized_solver_type": solver_type}
@@ -334,6 +343,9 @@ if __name__ == "__main__":
         pc_guidance_gamma = exp_dict.get("pc_guidance_gamma", 1.0)
         pc_enable_below_t = exp_dict.get("pc_enable_below_t", 1.0)
         pc_guidance_weight = exp_dict.get("pc_guidance_weight", 1.0)
+        pc_magnitude_weight = exp_dict.get("pc_magnitude_weight", 0.2)
+        pc_magnitude_min = exp_dict.get("pc_magnitude_min", 1.0)
+        pc_magnitude_max = exp_dict.get("pc_magnitude_max", 1.1)
         estimated_nfe = estimate_flowedit_nfe(T_steps, n_min, n_max, n_avg, solver_type)
         seed = exp_dict["seed"]
 
@@ -391,6 +403,9 @@ if __name__ == "__main__":
                                                             pc_guidance_gamma=pc_guidance_gamma,
                                                             pc_enable_below_t=pc_enable_below_t,
                                                             pc_guidance_weight=pc_guidance_weight,
+                                                            pc_magnitude_weight=pc_magnitude_weight,
+                                                            pc_magnitude_min=pc_magnitude_min,
+                                                            pc_magnitude_max=pc_magnitude_max,
                                                             return_stats=True,)
                     
                 elif model_type == 'FLUX':
@@ -411,6 +426,9 @@ if __name__ == "__main__":
                                                             pc_guidance_gamma=pc_guidance_gamma,
                                                             pc_enable_below_t=pc_enable_below_t,
                                                             pc_guidance_weight=pc_guidance_weight,
+                                                            pc_magnitude_weight=pc_magnitude_weight,
+                                                            pc_magnitude_min=pc_magnitude_min,
+                                                            pc_magnitude_max=pc_magnitude_max,
                                                             return_stats=True,)
                 else:
                     raise NotImplementedError(f"Sampler type {model_type} not implemented")
@@ -458,6 +476,9 @@ if __name__ == "__main__":
                     "pc_guidance_gamma": pc_guidance_gamma,
                     "pc_enable_below_t": pc_enable_below_t,
                     "pc_guidance_weight": pc_guidance_weight,
+                    "pc_magnitude_weight": pc_magnitude_weight,
+                    "pc_magnitude_min": pc_magnitude_min,
+                    "pc_magnitude_max": pc_magnitude_max,
                     "seed": seed,
                     "negative_prompt": negative_prompt,
                     "elapsed_seconds": f"{elapsed_seconds:.3f}",
@@ -487,6 +508,9 @@ if __name__ == "__main__":
                     f.write(f"PC guidance gamma: {pc_guidance_gamma}\n")
                     f.write(f"PC enable below t: {pc_enable_below_t}\n")
                     f.write(f"PC guidance weight: {pc_guidance_weight}\n")
+                    f.write(f"PC magnitude weight: {pc_magnitude_weight}\n")
+                    f.write(f"PC magnitude min: {pc_magnitude_min}\n")
+                    f.write(f"PC magnitude max: {pc_magnitude_max}\n")
                     f.write(f"Runtime seconds: {elapsed_seconds:.3f}\n")
                 
 

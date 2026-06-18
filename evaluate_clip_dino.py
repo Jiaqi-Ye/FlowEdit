@@ -133,6 +133,9 @@ def main():
                 "pc_guidance_lambda": row.get("pc_guidance_lambda", ""),
                 "pc_guidance_gamma": row.get("pc_guidance_gamma", ""),
                 "pc_guidance_weight": row.get("pc_guidance_weight", ""),
+                "pc_magnitude_weight": row.get("pc_magnitude_weight", ""),
+                "pc_magnitude_min": row.get("pc_magnitude_min", ""),
+                "pc_magnitude_max": row.get("pc_magnitude_max", ""),
                 "source_image": source_image_path,
                 "target_index": target_index,
                 "elapsed_seconds": row["elapsed_seconds"],
@@ -169,6 +172,9 @@ def main():
             row["pc_guidance_lambda"],
             row["pc_guidance_gamma"],
             row["pc_guidance_weight"],
+            row.get("pc_magnitude_weight", ""),
+            row.get("pc_magnitude_min", ""),
+            row.get("pc_magnitude_max", ""),
         )
         grouped.setdefault(key, {"clip": [], "dino": [], "score": [], "time": []})
         grouped[key]["clip"].append(float(row["clip_alignment"]))
@@ -190,6 +196,9 @@ def main():
         pc_guidance_lambda,
         pc_guidance_gamma,
         pc_guidance_weight,
+        pc_magnitude_weight,
+        pc_magnitude_min,
+        pc_magnitude_max,
     ), vals in grouped.items():
         summary_rows.append(
             {
@@ -205,6 +214,9 @@ def main():
                 "pc_guidance_lambda": pc_guidance_lambda,
                 "pc_guidance_gamma": pc_guidance_gamma,
                 "pc_guidance_weight": pc_guidance_weight,
+                "pc_magnitude_weight": pc_magnitude_weight,
+                "pc_magnitude_min": pc_magnitude_min,
+                "pc_magnitude_max": pc_magnitude_max,
                 "num_samples": len(vals["clip"]),
                 "clip_alignment_mean": f"{mean(vals['clip']):.6f}",
                 "dino_similarity_mean": f"{mean(vals['dino']):.6f}",

@@ -74,6 +74,9 @@ def main():
                 "pc_guidance_lambda": row.get("pc_guidance_lambda", ""),
                 "pc_guidance_gamma": row.get("pc_guidance_gamma", ""),
                 "pc_guidance_weight": row.get("pc_guidance_weight", ""),
+                "pc_magnitude_weight": row.get("pc_magnitude_weight", ""),
+                "pc_magnitude_min": row.get("pc_magnitude_min", ""),
+                "pc_magnitude_max": row.get("pc_magnitude_max", ""),
                 "source_image": row["source_image"],
                 "target_index": row["target_index"],
                 "output_image": output_image_path,
@@ -111,6 +114,9 @@ def main():
             row["pc_guidance_lambda"],
             row["pc_guidance_gamma"],
             row["pc_guidance_weight"],
+            row.get("pc_magnitude_weight", ""),
+            row.get("pc_magnitude_min", ""),
+            row.get("pc_magnitude_max", ""),
         )
         grouped.setdefault(key, {"artifact": [], "delta": [], "clip": [], "sat": []})
         grouped[key]["artifact"].append(float(row["edited_artifact_proxy"]))
@@ -132,6 +138,9 @@ def main():
         pc_guidance_lambda,
         pc_guidance_gamma,
         pc_guidance_weight,
+        pc_magnitude_weight,
+        pc_magnitude_min,
+        pc_magnitude_max,
     ), vals in grouped.items():
         summary_rows.append(
             {
@@ -147,6 +156,9 @@ def main():
                 "pc_guidance_lambda": pc_guidance_lambda,
                 "pc_guidance_gamma": pc_guidance_gamma,
                 "pc_guidance_weight": pc_guidance_weight,
+                "pc_magnitude_weight": pc_magnitude_weight,
+                "pc_magnitude_min": pc_magnitude_min,
+                "pc_magnitude_max": pc_magnitude_max,
                 "num_samples": len(vals["artifact"]),
                 "edited_artifact_proxy_mean": f"{mean(vals['artifact']):.6f}",
                 "artifact_proxy_delta_vs_source_mean": f"{mean(vals['delta']):.6f}",

@@ -63,6 +63,12 @@ def normalize_solver_type(solver_type: str) -> str:
     if solver_type in {"flowedit_bridge_dir", "flowedit_bridge_direction"}:
         return "flowedit_bridge_directional"
     if solver_type in {
+        "flowedit_bridge_dir_mag",
+        "flowedit_bridge_direction_magnitude",
+        "flowedit_bridge_directional_magnitude",
+    }:
+        return "flowedit_bridge_dir_mag"
+    if solver_type in {
         "flowedit_cfgpp_no_first",
         "flowedit_cfgpp_no_first_term",
         "flowedit_remove_cfgpp_first_term",
@@ -77,6 +83,7 @@ def normalize_solver_type(solver_type: str) -> str:
         "flowedit_cfgpp_no_first_term",
         "flowedit_bridge_interpolate",
         "flowedit_bridge_directional",
+        "flowedit_bridge_dir_mag",
     }:
         return solver_type
     raise ValueError(
@@ -84,7 +91,7 @@ def normalize_solver_type(solver_type: str) -> str:
         "Use 'euler', 'midpoint', 'flowedit_pc_additive', "
         "'flowedit_pc_interpolate', 'flowedit_cfg_like_interpolate', "
         "'flowedit_cfgpp_no_first_term', 'flowedit_bridge_interpolate', "
-        "or 'flowedit_bridge_directional'."
+        "'flowedit_bridge_directional', or 'flowedit_bridge_dir_mag'."
     )
 
 
@@ -128,6 +135,46 @@ def blend_direction_preserve_norm(v_base, v_mid, alpha, mid_weight: float = 1.0,
     blend_dir = blend_dir / blend_norm
 
     blended = (base_norm * blend_dir).reshape_as(base_f32)
+    return blended.to(v_base.dtype)
+
+
+def blend_direction_with_magnitude_recovery(
+    v_base,
+    v_mid,
+    alpha,
+    mid_weight: float = 1.0,
+    magnitude_weight: float = 0.2,
+    magnitude_min: float = 1.0,
+    magnitude_max: float = 1.1,
+    eps: float = 1e-6,
+):
+    """Rotate toward the midpoint field, then recover only a clamped amount of midpoint norm."""
+    base_f32 = v_base.to(torch.float32)
+    mid_f32 = (mid_weight * v_mid).to(torch.float32)
+
+    base_flat = base_f32.reshape(base_f32.shape[0], -1)
+    mid_flat = mid_f32.reshape(mid_f32.shape[0], -1)
+
+    base_norm = torch.linalg.vector_norm(base_flat, dim=1, keepdim=True).clamp_min(eps)
+    mid_norm = torch.linalg.vector_norm(mid_flat, dim=1, keepdim=True).clamp_min(eps)
+
+    base_dir = base_flat / base_norm
+    mid_dir = mid_flat / mid_norm
+
+    alpha = torch.as_tensor(alpha, device=base_f32.device, dtype=base_f32.dtype).reshape(1, 1)
+    cos_sim = (base_dir * mid_dir).sum(dim=1, keepdim=True).clamp(-1.0, 1.0)
+    alpha_dir = alpha * cos_sim.clamp_min(0.0)
+
+    blend_dir = (1 - alpha_dir) * base_dir + alpha_dir * mid_dir
+    blend_norm = torch.linalg.vector_norm(blend_dir, dim=1, keepdim=True).clamp_min(eps)
+    blend_dir = blend_dir / blend_norm
+
+    mag_alpha = (alpha * float(magnitude_weight)).clamp(0.0, 1.0)
+    target_norm = (1 - mag_alpha) * base_norm + mag_alpha * mid_norm
+    norm_ratio = (target_norm / base_norm).clamp(float(magnitude_min), float(magnitude_max))
+    recovered_norm = base_norm * norm_ratio
+
+    blended = (recovered_norm * blend_dir).reshape_as(base_f32)
     return blended.to(v_base.dtype)
 
 
@@ -217,6 +264,9 @@ def FlowEditSD3(pipe,
     pc_guidance_gamma: float = 1.0,
     pc_enable_below_t: float = 1.0,
     pc_guidance_weight: float = 1.0,
+    pc_magnitude_weight: float = 0.2,
+    pc_magnitude_min: float = 1.0,
+    pc_magnitude_max: float = 1.1,
     return_stats: bool = False,):
     
     device = x_src.device
@@ -342,15 +392,25 @@ def FlowEditSD3(pipe,
             V_hat_avg += (1/n_avg) * V_hat
         return V_hat_avg
 
-    def flowedit_bridge_pc_delta(z_edit, t_unit, t_model, t_mid_unit, t_mid_model, dt, noises, directional=False):
+    def flowedit_bridge_pc_delta(z_edit, t_unit, t_model, t_mid_unit, t_mid_model, dt, noises, correction_mode="interpolate"):
         V_delta = flowedit_delta(z_edit, t_unit, t_model, noises)
         alpha = scheduled_flowedit_alpha(t_unit, pc_guidance_lambda, pc_guidance_gamma, pc_enable_below_t)
         if float(alpha.max().item()) <= 0:
             return V_delta
         zt_mid = (z_edit.to(torch.float32) + 0.5 * dt * V_delta).to(V_delta.dtype)
         V_delta_mid = flowedit_delta(zt_mid, t_mid_unit, t_mid_model, noises)
-        if directional:
+        if correction_mode == "directional":
             return blend_direction_preserve_norm(V_delta, V_delta_mid, alpha, pc_guidance_weight)
+        if correction_mode == "dir_mag":
+            return blend_direction_with_magnitude_recovery(
+                V_delta,
+                V_delta_mid,
+                alpha,
+                mid_weight=pc_guidance_weight,
+                magnitude_weight=pc_magnitude_weight,
+                magnitude_min=pc_magnitude_min,
+                magnitude_max=pc_magnitude_max,
+            )
         return (1 - alpha) * V_delta + alpha * (pc_guidance_weight * V_delta_mid)
 
     def target_velocity(z_tar, t_model):
@@ -409,7 +469,7 @@ def FlowEditSD3(pipe,
                     if solver_type == "flowedit_pc_interpolate"
                     else "additive",
                 )
-            elif solver_type in {"flowedit_bridge_interpolate", "flowedit_bridge_directional"}:
+            elif solver_type in {"flowedit_bridge_interpolate", "flowedit_bridge_directional", "flowedit_bridge_dir_mag"}:
                 V_delta_avg = flowedit_bridge_pc_delta(
                     zt_edit,
                     t_i,
@@ -418,7 +478,11 @@ def FlowEditSD3(pipe,
                     t_mid,
                     dt,
                     fwd_noises,
-                    directional=solver_type == "flowedit_bridge_directional",
+                    correction_mode="directional"
+                    if solver_type == "flowedit_bridge_directional"
+                    else "dir_mag"
+                    if solver_type == "flowedit_bridge_dir_mag"
+                    else "interpolate",
                 )
             else:
                 V_delta_avg = flowedit_delta(zt_edit, t_i, t, fwd_noises)
@@ -481,6 +545,9 @@ def FlowEditFLUX(pipe,
     pc_guidance_gamma: float = 1.0,
     pc_enable_below_t: float = 1.0,
     pc_guidance_weight: float = 1.0,
+    pc_magnitude_weight: float = 0.2,
+    pc_magnitude_min: float = 1.0,
+    pc_magnitude_max: float = 1.1,
     return_stats: bool = False,):
 
     device = x_src.device
@@ -657,15 +724,25 @@ def FlowEditFLUX(pipe,
             V_hat_avg += (1/n_avg) * V_hat
         return V_hat_avg
 
-    def flowedit_bridge_pc_delta(z_edit, sigma, t_model, sigma_mid, t_mid_model, dt, noises, directional=False):
+    def flowedit_bridge_pc_delta(z_edit, sigma, t_model, sigma_mid, t_mid_model, dt, noises, correction_mode="interpolate"):
         V_delta = flowedit_delta(z_edit, sigma, t_model, noises)
         alpha = scheduled_flowedit_alpha(sigma, pc_guidance_lambda, pc_guidance_gamma, pc_enable_below_t)
         if float(alpha.max().item()) <= 0:
             return V_delta
         zt_mid = (z_edit.to(torch.float32) + 0.5 * dt * V_delta).to(V_delta.dtype)
         V_delta_mid = flowedit_delta(zt_mid, sigma_mid, t_mid_model, noises)
-        if directional:
+        if correction_mode == "directional":
             return blend_direction_preserve_norm(V_delta, V_delta_mid, alpha, pc_guidance_weight)
+        if correction_mode == "dir_mag":
+            return blend_direction_with_magnitude_recovery(
+                V_delta,
+                V_delta_mid,
+                alpha,
+                mid_weight=pc_guidance_weight,
+                magnitude_weight=pc_magnitude_weight,
+                magnitude_min=pc_magnitude_min,
+                magnitude_max=pc_magnitude_max,
+            )
         return (1 - alpha) * V_delta + alpha * (pc_guidance_weight * V_delta_mid)
 
     def target_velocity(z_tar, t_model):
@@ -724,7 +801,7 @@ def FlowEditFLUX(pipe,
                     if solver_type == "flowedit_pc_interpolate"
                     else "additive",
                 )
-            elif solver_type in {"flowedit_bridge_interpolate", "flowedit_bridge_directional"}:
+            elif solver_type in {"flowedit_bridge_interpolate", "flowedit_bridge_directional", "flowedit_bridge_dir_mag"}:
                 V_delta_avg = flowedit_bridge_pc_delta(
                     zt_edit,
                     t_i,
@@ -733,7 +810,11 @@ def FlowEditFLUX(pipe,
                     t_mid,
                     dt,
                     fwd_noises,
-                    directional=solver_type == "flowedit_bridge_directional",
+                    correction_mode="directional"
+                    if solver_type == "flowedit_bridge_directional"
+                    else "dir_mag"
+                    if solver_type == "flowedit_bridge_dir_mag"
+                    else "interpolate",
                 )
             else:
                 V_delta_avg = flowedit_delta(zt_edit, t_i, t, fwd_noises)

@@ -1,0 +1,49 @@
+-
+    input_img: Data/Images/bikes.png
+    source_prompt: A bicycle parked on the sidewalk in front of a red brick building. The bicycle is positioned close to the door of the building, making it easily accessible for the owner. The building has a red brick exterior, giving it a distinctive appearance.
+
+    target_prompts:
+    - A green bicycle parked on the sidewalk in front of a red brick building. The bicycle is positioned close to the door of the building, making it easily accessible for the owner. The building has a red brick exterior, giving it a distinctive appearance.
+
+    target_codes:
+    - green_bicycle
+
+-
+    input_img: Data/Images/bus.png
+    source_prompt: A yellow van parked in front of a house, outside a garage. The van is of a classic model. The house has a brown exterior, and there is a tree nearby. There is a spare tire hanged between the headlights of the van.
+
+    target_prompts:
+    - A pink van parked in front of a house, outside a garage. The van is of a classic model. The house has a brown exterior, and there is a tree nearby. There is a spare tire hanged between the headlights of the van.
+
+    target_codes:
+    - pink_van
+
+-
+    input_img: Data/Images/cake_red_blueberries.png
+    source_prompt: A slice of red velvet cake with white frosting, topped with blueberries.
+
+    target_prompts:
+    - A slice of chocolate cake with white frosting, topped with blueberries.
+
+    target_codes:
+    - chocolate_cake
+
+-
+    input_img: Data/Images/flowers.png
+    source_prompt: A vase filled with a beautiful bouquet of pink, red and white flowers.
+
+    target_prompts:
+    - A vase filled with a beautiful bouquet of orange, yellow and white flowers.
+
+    target_codes:
+    - orange_yellow_white_flowers
+
+-
+    input_img: Data/Images/pizza_board.png
+    source_prompt: A large pizza with cheese and bits of meat.
+
+    target_prompts:
+    - A large pizza with cheese and mushrooms.
+
+    target_codes:
+    - mushroom_pizza

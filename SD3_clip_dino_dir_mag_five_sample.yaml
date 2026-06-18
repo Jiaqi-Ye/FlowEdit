@@ -1,0 +1,55 @@
+-
+  exp_name: "FiveSample_OriginalFlowEdit_Euler18_Tar75"
+  dataset_yaml: edits_clip_dino_five_sample.yaml
+  model_type: "SD3"
+  sampler_type: "FlowEditSD3"
+  solver_type: "euler"
+  T_steps: 24
+  n_avg: 1
+  src_guidance_scale: 4.5
+  tar_guidance_scale: 7.5
+  n_min: 0
+  n_max: 18
+  seed: 42
+  pipeline_load_mode: "to_device"
+
+-
+  exp_name: "FiveSample_BridgeInterp_OldBest_L100_G200"
+  dataset_yaml: edits_clip_dino_five_sample.yaml
+  model_type: "SD3"
+  sampler_type: "FlowEditSD3"
+  solver_type: "flowedit_bridge_interpolate"
+  T_steps: 12
+  n_avg: 1
+  src_guidance_scale: 4.5
+  tar_guidance_scale: 7.5
+  n_min: 0
+  n_max: 9
+  pc_guidance_lambda: 1.0
+  pc_guidance_gamma: 2.0
+  pc_enable_below_t: 1.0
+  pc_guidance_weight: 1.0
+  seed: 42
+  pipeline_load_mode: "to_device"
+
+-
+  exp_name: "FiveSample_BridgeDirMag_Balanced_T040_W070_M020_R110"
+  dataset_yaml: edits_clip_dino_five_sample.yaml
+  model_type: "SD3"
+  sampler_type: "FlowEditSD3"
+  solver_type: "flowedit_bridge_dir_mag"
+  T_steps: 12
+  n_avg: 1
+  src_guidance_scale: 4.5
+  tar_guidance_scale: 7.5
+  n_min: 0
+  n_max: 9
+  pc_guidance_lambda: 1.0
+  pc_guidance_gamma: 2.0
+  pc_enable_below_t: 0.4
+  pc_guidance_weight: 0.7
+  pc_magnitude_weight: 0.20
+  pc_magnitude_min: 1.00
+  pc_magnitude_max: 1.10
+  seed: 42
+  pipeline_load_mode: "to_device"
