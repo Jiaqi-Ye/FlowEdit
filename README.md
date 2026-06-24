@@ -37,6 +37,21 @@ python flowedit_eval.py metrics --run_summary_csv outputs/flowedit_eval/sd3/run_
 
 Use `--sample_limit 3`, `10`, `20`, `50`, or `100` for staged runs, and omit it for the full 281 image-prompt pairs. Use `--image_resolution 512` for Colab-friendly smoke tests, and omit it for native 1024px paper-resolution evaluation. Set `--force_rerun` on `run_script.py` to ignore cached edited images.
 
+For the tuned same-NFE bridge sweep used by `FlowEdit_bridge_consistent_Colab.ipynb`, lower the shared SD3 target CFG and give each bridge setting a unique `setting_id`:
+
+```bash
+python flowedit_eval.py write-config \
+  --model_name sd3 \
+  --dataset_yaml Data/flowedit.yaml \
+  --methods flowedit_baseline,bridge_interpolate \
+  --budget_mode same_nfe \
+  --tar_guidance_scale 10.5 \
+  --bridge_settings_json '[{"setting_id":"l025_g200_w050","pc_guidance_lambda":0.25,"pc_guidance_gamma":2.0,"pc_guidance_weight":0.5},{"setting_id":"l050_g200_w050","pc_guidance_lambda":0.5,"pc_guidance_gamma":2.0,"pc_guidance_weight":0.5},{"setting_id":"l050_g200_w075","pc_guidance_lambda":0.5,"pc_guidance_gamma":2.0,"pc_guidance_weight":0.75}]' \
+  --output_yaml outputs/flowedit_eval_tuned_sd3_same_nfe_tar105_v1/sd3/sd3_tuned_eval_config.yaml
+```
+
+Cached full-eval images are reused only when their metadata matches the current solver, CFG, NFE, bridge parameters, seed, prompts, and image resolution. Stale cached images are regenerated automatically.
+
 ## Usage - your own examples
 
 * Upload images to `example_images` folder. 

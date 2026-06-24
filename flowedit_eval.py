@@ -36,6 +36,48 @@ METHOD_SOLVERS = {
     "bridge_directional": "flowedit_bridge_directional",
 }
 
+def format_setting_float(value: Any) -> str:
+    text = f"{float(value):.3f}".rstrip("0").rstrip(".")
+    return text.replace("-", "m").replace(".", "")
+
+
+def default_bridge_setting_id(setting: Dict[str, Any]) -> str:
+    lam = format_setting_float(setting.get("pc_guidance_lambda", 1.0))
+    gamma = format_setting_float(setting.get("pc_guidance_gamma", 1.0))
+    weight = format_setting_float(setting.get("pc_guidance_weight", 1.0))
+    enable = setting.get("pc_enable_below_t", 1.0)
+    setting_id = f"l{lam}_g{gamma}_w{weight}"
+    if float(enable) < 1.0:
+        setting_id += f"_e{format_setting_float(enable)}"
+    return setting_id
+
+
+def parse_bridge_settings(value: str | None) -> Optional[List[Dict[str, Any]]]:
+    if not value:
+        return None
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ValueError("--bridge_settings_json must be valid JSON.") from exc
+    if isinstance(parsed, dict):
+        parsed = [parsed]
+    if not isinstance(parsed, list):
+        raise ValueError("--bridge_settings_json must be a JSON object or a JSON list of objects.")
+
+    settings: List[Dict[str, Any]] = []
+    for index, item in enumerate(parsed):
+        if not isinstance(item, dict):
+            raise ValueError(f"Bridge setting {index} must be a JSON object.")
+        setting = dict(item)
+        setting.setdefault("pc_guidance_lambda", 1.0)
+        setting.setdefault("pc_guidance_gamma", 1.0)
+        setting.setdefault("pc_guidance_weight", 1.0)
+        setting.setdefault("pc_enable_below_t", 1.0)
+        setting.setdefault("setting_id", default_bridge_setting_id(setting))
+        settings.append(setting)
+    return settings
+
+
 MODEL_DEFAULTS = {
     "sd3": {
         "model_type": "SD3",
@@ -215,6 +257,9 @@ def build_default_experiments(
     dataset_yaml: str,
     methods: Sequence[str] = DEFAULT_METHODS,
     budget_mode: str = "paper",
+    src_guidance_scale: Optional[float] = None,
+    tar_guidance_scale: Optional[float] = None,
+    bridge_settings: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     model_key = model_slug(model_name)
     if model_key not in MODEL_DEFAULTS:
@@ -230,6 +275,10 @@ def build_default_experiments(
             raise ValueError(f"Unsupported method '{method}'. Available: {sorted(METHOD_SOLVERS)}")
         solver_type = METHOD_SOLVERS[method_key]
         cfg = dict(base_defaults)
+        if src_guidance_scale is not None:
+            cfg["src_guidance_scale"] = src_guidance_scale
+        if tar_guidance_scale is not None:
+            cfg["tar_guidance_scale"] = tar_guidance_scale
         cfg.update(
             {
                 "exp_name": f"{model_key}_{method_key}",
@@ -244,7 +293,26 @@ def build_default_experiments(
         if budget_mode == "same_nfe" and method_key in {"bridge_interpolate", "bridge_directional"}:
             cfg["n_max"] = max(1, math.ceil(base_defaults["n_max"] / 2))
             cfg["T_steps"] = max(cfg["n_max"], math.ceil(base_defaults["T_steps"] / 2))
-        experiments.append(cfg)
+        if bridge_settings and method_key in {"bridge_interpolate", "bridge_directional"}:
+            for setting in bridge_settings:
+                setting_cfg = dict(cfg)
+                setting_id = str(setting.get("setting_id") or default_bridge_setting_id(setting))
+                setting_cfg.update(
+                    {
+                        "exp_name": f"{model_key}_{method_key}_{slugify(setting_id)}",
+                        "setting_id": setting_id,
+                        "pc_guidance_lambda": float(setting.get("pc_guidance_lambda", 1.0)),
+                        "pc_guidance_gamma": float(setting.get("pc_guidance_gamma", 1.0)),
+                        "pc_guidance_weight": float(setting.get("pc_guidance_weight", 1.0)),
+                        "pc_enable_below_t": float(setting.get("pc_enable_below_t", 1.0)),
+                    }
+                )
+                for key in ("src_guidance_scale", "tar_guidance_scale", "T_steps", "n_min", "n_max", "n_avg", "seed"):
+                    if key in setting:
+                        setting_cfg[key] = setting[key]
+                experiments.append(setting_cfg)
+        else:
+            experiments.append(cfg)
     return experiments
 
 
@@ -254,12 +322,18 @@ def write_experiment_yaml(
     dataset_yaml: str,
     methods: Sequence[str] = DEFAULT_METHODS,
     budget_mode: str = "paper",
+    src_guidance_scale: Optional[float] = None,
+    tar_guidance_scale: Optional[float] = None,
+    bridge_settings: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     experiments = build_default_experiments(
         model_name=model_name,
         dataset_yaml=dataset_yaml,
         methods=methods,
         budget_mode=budget_mode,
+        src_guidance_scale=src_guidance_scale,
+        tar_guidance_scale=tar_guidance_scale,
+        bridge_settings=bridge_settings,
     )
     output_yaml = Path(output_yaml)
     output_yaml.parent.mkdir(parents=True, exist_ok=True)
@@ -425,6 +499,19 @@ class MetricComputer:
         inputs = inputs.to(self.device)
         with self.torch.inference_mode():
             image_features = model.get_image_features(**inputs)
+            if not self.torch.is_tensor(image_features):
+                if hasattr(image_features, "image_embeds"):
+                    image_features = image_features.image_embeds
+                elif hasattr(image_features, "pooler_output"):
+                    image_features = image_features.pooler_output
+                    if hasattr(model, "visual_projection"):
+                        image_features = model.visual_projection(image_features)
+                elif hasattr(image_features, "last_hidden_state"):
+                    image_features = image_features.last_hidden_state[:, 0, :]
+                elif isinstance(image_features, (tuple, list)) and image_features:
+                    image_features = image_features[0]
+                else:
+                    raise TypeError(f"Unsupported CLIP image feature output: {type(image_features)!r}")
             image_features = F.normalize(image_features, dim=-1)
         return float((image_features[0] * image_features[1]).sum().item())
 
@@ -773,10 +860,22 @@ def write_win_rate_report(
         if row.get("method") == baseline_method and row.get("setting_id", "default") == "default"
     }
     rows_out: List[Dict[str, Any]] = []
-    for method in sorted({row.get("method", "") for row in metric_rows if row.get("method") != baseline_method}):
-        method_rows = [row for row in metric_rows if row.get("method") == method]
-        out: Dict[str, Any] = {"method": method, "num_comparable_samples": 0}
+    method_settings = sorted(
+        {
+            (row.get("method", ""), row.get("setting_id", "default"))
+            for row in metric_rows
+            if row.get("method") != baseline_method
+        }
+    )
+    for method, setting_id in method_settings:
+        method_rows = [
+            row
+            for row in metric_rows
+            if row.get("method") == method and row.get("setting_id", "default") == setting_id
+        ]
+        out: Dict[str, Any] = {"method": method, "setting_id": setting_id, "num_comparable_samples": 0}
         wins = {metric: 0 for metric in METRIC_DIRECTIONS}
+        metric_counts = {metric: 0 for metric in METRIC_DIRECTIONS}
         comparable = 0
         for row in method_rows:
             baseline = baseline_by_sample.get(row.get("sample_id", ""))
@@ -788,11 +887,14 @@ def write_win_rate_report(
                 base_val = _to_float(baseline.get(metric))
                 if math.isnan(val) or math.isnan(base_val):
                     continue
+                metric_counts[metric] += 1
                 if (direction == "higher" and val > base_val) or (direction == "lower" and val < base_val):
                     wins[metric] += 1
         out["num_comparable_samples"] = comparable
         for metric in METRIC_DIRECTIONS:
-            out[f"{metric}_win_rate_vs_{baseline_method}"] = f"{(wins[metric] / comparable):.6f}" if comparable else ""
+            count = metric_counts[metric]
+            out[f"{metric}_win_rate_vs_{baseline_method}"] = f"{(wins[metric] / count):.6f}" if count else ""
+            out[f"{metric}_num_valid_pairs"] = count
         rows_out.append(out)
 
     path = model_root / "win_rate_vs_flowedit_baseline.csv"
@@ -896,16 +998,37 @@ def inspect_dataset_command(args: argparse.Namespace) -> None:
 
 def write_config_command(args: argparse.Namespace) -> None:
     methods = [part.strip() for part in args.methods.split(",") if part.strip()]
+    bridge_settings = parse_bridge_settings(args.bridge_settings_json)
+    if bridge_settings is None and any(
+        value is not None
+        for value in (args.bridge_lambda, args.bridge_gamma, args.bridge_weight, args.bridge_enable_below_t)
+    ):
+        bridge_setting = {
+            "pc_guidance_lambda": args.bridge_lambda if args.bridge_lambda is not None else 1.0,
+            "pc_guidance_gamma": args.bridge_gamma if args.bridge_gamma is not None else 1.0,
+            "pc_guidance_weight": args.bridge_weight if args.bridge_weight is not None else 1.0,
+            "pc_enable_below_t": args.bridge_enable_below_t if args.bridge_enable_below_t is not None else 1.0,
+        }
+        if args.bridge_setting_id:
+            bridge_setting["setting_id"] = args.bridge_setting_id
+        bridge_settings = [bridge_setting]
     experiments = write_experiment_yaml(
         output_yaml=args.output_yaml,
         model_name=args.model_name,
         dataset_yaml=args.dataset_yaml,
         methods=methods,
         budget_mode=args.budget_mode,
+        src_guidance_scale=args.src_guidance_scale,
+        tar_guidance_scale=args.tar_guidance_scale,
+        bridge_settings=bridge_settings,
     )
     print(f"Wrote experiment config: {args.output_yaml}")
     for exp in experiments:
-        print(f"{exp['method_name']}: {exp['solver_type']} T={exp['T_steps']} n_max={exp['n_max']}")
+        print(
+            f"{exp['method_name']}/{exp.get('setting_id', 'default')}: "
+            f"{exp['solver_type']} T={exp['T_steps']} n_max={exp['n_max']} "
+            f"src_cfg={exp['src_guidance_scale']} tar_cfg={exp['tar_guidance_scale']}"
+        )
 
 
 def metrics_command(args: argparse.Namespace) -> None:
@@ -948,6 +1071,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
     config_parser.add_argument("--dataset_yaml", default="Data/flowedit.yaml")
     config_parser.add_argument("--methods", default=",".join(DEFAULT_METHODS))
     config_parser.add_argument("--budget_mode", choices=("paper", "same_nfe"), default="paper")
+    config_parser.add_argument("--src_guidance_scale", type=float, default=None)
+    config_parser.add_argument("--tar_guidance_scale", type=float, default=None)
+    config_parser.add_argument("--bridge_lambda", type=float, default=None)
+    config_parser.add_argument("--bridge_gamma", type=float, default=None)
+    config_parser.add_argument("--bridge_weight", type=float, default=None)
+    config_parser.add_argument("--bridge_enable_below_t", type=float, default=None)
+    config_parser.add_argument("--bridge_setting_id", default=None)
+    config_parser.add_argument(
+        "--bridge_settings_json",
+        default=None,
+        help=(
+            "JSON object/list with bridge setting_id, pc_guidance_lambda, pc_guidance_gamma, "
+            "pc_guidance_weight, and optional per-setting overrides."
+        ),
+    )
     config_parser.add_argument("--output_yaml", required=True)
     config_parser.set_defaults(func=write_config_command)
 

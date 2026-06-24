@@ -62,6 +62,49 @@ def estimate_flowedit_nfe(T_steps, n_min, n_max, n_avg, solver_type):
     return edit_steps * n_avg * edit_calls_per_step + final_steps * final_calls_per_step
 
 
+CACHE_MATCH_FIELDS = (
+    "model_id",
+    "method",
+    "setting_id",
+    "solver_type",
+    "sample_id",
+    "image_resolution",
+    "source_prompt",
+    "target_prompt",
+    "T_steps",
+    "n_avg",
+    "src_guidance_scale",
+    "tar_guidance_scale",
+    "n_min",
+    "n_max",
+    "pc_guidance_lambda",
+    "pc_guidance_gamma",
+    "pc_enable_below_t",
+    "pc_guidance_weight",
+    "seed",
+)
+
+
+def _cache_values_equal(left, right) -> bool:
+    if left is None:
+        left = ""
+    if right is None:
+        right = ""
+    try:
+        return abs(float(left) - float(right)) <= 1e-6
+    except (TypeError, ValueError):
+        return str(left) == str(right)
+
+
+def cache_mismatch_reason(cached_metadata, expected_metadata):
+    if not cached_metadata:
+        return "missing metadata"
+    for field in CACHE_MATCH_FIELDS:
+        if not _cache_values_equal(cached_metadata.get(field), expected_metadata.get(field)):
+            return f"{field}: cached={cached_metadata.get(field)!r}, expected={expected_metadata.get(field)!r}"
+    return None
+
+
 def describe_flowedit_solver(solver_type: str):
     solver_type = normalize_solver_type(solver_type)
     descriptions = {
@@ -470,13 +513,37 @@ if __name__ == "__main__":
             output_image_path = Path(output_image_path)
             cached_generation = False
             cached_metadata = read_json(metadata_json_path)
+            expected_cache_metadata = {
+                "model_id": model_id,
+                "method": method,
+                "setting_id": setting_id,
+                "solver_type": solver_type,
+                "sample_id": sample.sample_id,
+                "image_resolution": args.image_resolution or "",
+                "source_prompt": src_prompt,
+                "target_prompt": tar_prompt,
+                "T_steps": T_steps,
+                "n_avg": n_avg,
+                "src_guidance_scale": src_guidance_scale,
+                "tar_guidance_scale": tar_guidance_scale,
+                "n_min": n_min,
+                "n_max": n_max,
+                "pc_guidance_lambda": pc_guidance_lambda,
+                "pc_guidance_gamma": pc_guidance_gamma,
+                "pc_enable_below_t": pc_enable_below_t,
+                "pc_guidance_weight": pc_guidance_weight,
+                "seed": seed,
+            }
+            cache_reason = cache_mismatch_reason(cached_metadata, expected_cache_metadata)
             actual_nfe = cached_metadata.get("actual_nfe", estimated_nfe)
             elapsed_seconds = float(cached_metadata.get("elapsed_seconds", 0.0) or 0.0)
 
-            if args.eval_output_root and output_image_path.exists() and not args.force_rerun:
+            if args.eval_output_root and output_image_path.exists() and not args.force_rerun and cache_reason is None:
                 cached_generation = True
                 print(f"Skip cached output: {output_image_path}")
             else:
+                if args.eval_output_root and output_image_path.exists() and not args.force_rerun and cache_reason:
+                    print(f"Regenerate stale cached output ({cache_reason}): {output_image_path}")
                 start_time = time.perf_counter()
 
                 image = Image.open(image_src_path).convert("RGB")
