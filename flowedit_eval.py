@@ -491,27 +491,57 @@ class MetricComputer:
             text_features = F.normalize(outputs.text_embeds, dim=-1)
         return float((image_features * text_features).sum(dim=-1).item())
 
+    def _clip_image_features_from_vision(self, model, pixel_values):
+        image_outputs = model.vision_model(pixel_values=pixel_values)
+        image_features = getattr(image_outputs, "pooler_output", None)
+        if image_features is None:
+            image_features = getattr(image_outputs, "last_hidden_state", None)
+            if image_features is not None:
+                image_features = image_features[:, 0, :]
+        if image_features is None and isinstance(image_outputs, (tuple, list)) and image_outputs:
+            image_features = image_outputs[1] if len(image_outputs) > 1 else image_outputs[0]
+        if image_features is None:
+            raise TypeError(f"Unsupported CLIP vision output: {type(image_outputs)!r}")
+
+        projection = getattr(model, "visual_projection", None)
+        if projection is not None and image_features.shape[-1] == getattr(projection, "in_features", None):
+            image_features = projection(image_features)
+        return image_features
+
     def clip_i(self, source_image, edited_image) -> float:
         import torch.nn.functional as F
 
         model, processor = self._load_clip()
-        inputs = processor(images=[source_image, edited_image], return_tensors="pt")
-        inputs = inputs.to(self.device)
+        images = [source_image, edited_image]
+        image_features = None
+
         with self.torch.inference_mode():
-            image_features = model.get_image_features(**inputs)
-            if not self.torch.is_tensor(image_features):
-                if hasattr(image_features, "image_embeds"):
-                    image_features = image_features.image_embeds
-                elif hasattr(image_features, "pooler_output"):
-                    image_features = image_features.pooler_output
-                    if hasattr(model, "visual_projection"):
-                        image_features = model.visual_projection(image_features)
-                elif hasattr(image_features, "last_hidden_state"):
-                    image_features = image_features.last_hidden_state[:, 0, :]
-                elif isinstance(image_features, (tuple, list)) and image_features:
-                    image_features = image_features[0]
-                else:
-                    raise TypeError(f"Unsupported CLIP image feature output: {type(image_features)!r}")
+            try:
+                inputs = processor(text=["", ""], images=images, return_tensors="pt", padding=True, truncation=True)
+                inputs = inputs.to(self.device)
+                outputs = model(**inputs)
+                image_features = outputs.image_embeds
+            except RuntimeError as forward_exc:
+                inputs = processor(images=images, return_tensors="pt")
+                inputs = inputs.to(self.device)
+                try:
+                    image_features = model.get_image_features(**inputs)
+                except RuntimeError as image_exc:
+                    if "mat1 and mat2 shapes cannot be multiplied" not in str(image_exc):
+                        raise
+                    pixel_values = inputs["pixel_values"]
+                    image_features = self._clip_image_features_from_vision(model, pixel_values)
+                if not self.torch.is_tensor(image_features):
+                    if hasattr(image_features, "image_embeds"):
+                        image_features = image_features.image_embeds
+                    elif hasattr(image_features, "pooler_output"):
+                        image_features = image_features.pooler_output
+                    elif hasattr(image_features, "last_hidden_state"):
+                        image_features = image_features.last_hidden_state[:, 0, :]
+                    elif isinstance(image_features, (tuple, list)) and image_features:
+                        image_features = image_features[0]
+                    else:
+                        raise TypeError(f"Unsupported CLIP image feature output: {type(image_features)!r}") from forward_exc
             image_features = F.normalize(image_features, dim=-1)
         return float((image_features[0] * image_features[1]).sum().item())
 
