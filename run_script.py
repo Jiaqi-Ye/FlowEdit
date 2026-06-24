@@ -1,5 +1,6 @@
 import argparse
 import csv
+import gc
 import os
 import random
 import time
@@ -244,6 +245,22 @@ def configure_pipeline_runtime(pipe, runtime_name: str, device: torch.device, de
     return pipe
 
 
+def resize_image_for_eval(image: Image.Image, image_resolution: Optional[int]) -> Image.Image:
+    if image_resolution is None or image_resolution <= 0:
+        return image
+    width, height = image.size
+    longest_side = max(width, height)
+    if longest_side == image_resolution:
+        return image
+    scale = image_resolution / longest_side
+    new_width = max(16, int(round(width * scale)))
+    new_height = max(16, int(round(height * scale)))
+    new_width -= new_width % 16
+    new_height -= new_height % 16
+    resample = getattr(getattr(Image, "Resampling", Image), "BICUBIC", Image.BICUBIC)
+    return image.resize((new_width, new_height), resample=resample)
+
+
 
 if __name__ == "__main__":
 
@@ -290,6 +307,12 @@ if __name__ == "__main__":
         type=int,
         default=0,
         help="Skip this many flattened image-prompt pairs before applying sample_limit.",
+    )
+    parser.add_argument(
+        "--image_resolution",
+        type=int,
+        default=None,
+        help="Resize the source image's longest side before editing. Omit for native/paper resolution.",
     )
     parser.add_argument(
         "--eval_output_root",
@@ -457,6 +480,7 @@ if __name__ == "__main__":
                 start_time = time.perf_counter()
 
                 image = Image.open(image_src_path).convert("RGB")
+                image = resize_image_for_eval(image, args.image_resolution)
                 # Crop to dimensions divisible by 16 to avoid VAE resizing issues.
                 image = image.crop((0, 0, image.width - image.width % 16, image.height - image.height % 16))
                 image_src = pipe.image_processor.preprocess(image)
@@ -538,6 +562,7 @@ if __name__ == "__main__":
                 "hf_user": hf_user or "",
                 "sample_id": sample.sample_id,
                 "image_id": sample.image_id,
+                "image_resolution": args.image_resolution or "",
                 "source_image": image_src_path,
                 "source_image_path": image_src_path,
                 "source_prompt": src_prompt,
@@ -572,6 +597,7 @@ if __name__ == "__main__":
             with open(prompts_txt_path, "w", encoding="utf-8") as f:
                 f.write(f"Sample ID: {sample.sample_id}\n")
                 f.write(f"Source image: {image_src_path}\n")
+                f.write(f"Image resolution: {args.image_resolution or 'native'}\n")
                 f.write(f"Source prompt: {src_prompt}\n")
                 f.write(f"Target prompt: {tar_prompt}\n")
                 f.write(f"Negative prompt: {negative_prompt}\n")
@@ -596,6 +622,9 @@ if __name__ == "__main__":
                 f.write(f"PC enable below t: {pc_enable_below_t}\n")
                 f.write(f"PC guidance weight: {pc_guidance_weight}\n")
                 f.write(f"Runtime seconds: {elapsed_seconds:.3f}\n")
+            if runtime_name == "cuda":
+                torch.cuda.empty_cache()
+            gc.collect()
     if run_summaries:
         summary_dir = os.path.dirname(summary_path)
         if summary_dir:
