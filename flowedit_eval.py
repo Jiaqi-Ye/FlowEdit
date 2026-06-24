@@ -311,6 +311,38 @@ def _to_float(value: Any) -> float:
     return float(value)
 
 
+def resize_longest_side(image, image_resolution: Optional[int]):
+    if image_resolution is None or image_resolution <= 0:
+        return image
+    width, height = image.size
+    longest_side = max(width, height)
+    if longest_side == image_resolution:
+        return image
+    scale = image_resolution / longest_side
+    new_width = max(1, int(round(width * scale)))
+    new_height = max(1, int(round(height * scale)))
+    resample = getattr(getattr(image, "Resampling", image), "BICUBIC", 3)
+    return image.resize((new_width, new_height), resample=resample)
+
+
+def parse_metric_names(metrics: str | Sequence[str] | None) -> List[str]:
+    if metrics is None:
+        return list(METRIC_DIRECTIONS)
+    if isinstance(metrics, str):
+        requested = [part.strip() for part in metrics.split(",") if part.strip()]
+    else:
+        requested = [str(part).strip() for part in metrics if str(part).strip()]
+    aliases = {key.lower(): key for key in METRIC_DIRECTIONS}
+    selected = []
+    for metric in requested:
+        canonical = aliases.get(metric.lower())
+        if canonical is None:
+            raise ValueError(f"Unknown metric '{metric}'. Available: {', '.join(METRIC_DIRECTIONS)}")
+        if canonical not in selected:
+            selected.append(canonical)
+    return selected
+
+
 class MetricComputer:
     def __init__(
         self,
@@ -444,18 +476,38 @@ class MetricComputer:
         with self.torch.inference_mode():
             return float(model(src, edt).item())
 
-    def compute_all(self, source_image, edited_image, target_prompt: str) -> Dict[str, float]:
-        return {
-            "CLIP-T": self.clip_t(edited_image, target_prompt),
-            "CLIP-I": self.clip_i(source_image, edited_image),
-            "LPIPS": self.lpips(source_image, edited_image),
-            "DINO": self.dino(source_image, edited_image),
-            "DreamSim": self.dreamsim(source_image, edited_image),
+    def compute_selected(
+        self,
+        source_image,
+        edited_image,
+        target_prompt: str,
+        metrics: Sequence[str],
+        skip_failed_metrics: bool = False,
+    ) -> Dict[str, Optional[float]]:
+        metric_fns = {
+            "CLIP-T": lambda: self.clip_t(edited_image, target_prompt),
+            "CLIP-I": lambda: self.clip_i(source_image, edited_image),
+            "LPIPS": lambda: self.lpips(source_image, edited_image),
+            "DINO": lambda: self.dino(source_image, edited_image),
+            "DreamSim": lambda: self.dreamsim(source_image, edited_image),
         }
+        values: Dict[str, Optional[float]] = {}
+        for metric in metrics:
+            try:
+                values[metric] = metric_fns[metric]()
+            except Exception as exc:
+                if not skip_failed_metrics:
+                    raise
+                print(f"Warning: metric {metric} failed and will be left blank: {exc}")
+                values[metric] = None
+        return values
+
+    def compute_all(self, source_image, edited_image, target_prompt: str) -> Dict[str, Optional[float]]:
+        return self.compute_selected(source_image, edited_image, target_prompt, list(METRIC_DIRECTIONS))
 
 
-def _complete_metric_row(row: Dict[str, Any]) -> bool:
-    return all(str(row.get(metric, "")).strip() not in {"", "nan", "None"} for metric in METRIC_DIRECTIONS)
+def _complete_metric_row(row: Dict[str, Any], metrics: Sequence[str]) -> bool:
+    return all(str(row.get(metric, "")).strip() not in {"", "nan", "None"} for metric in metrics)
 
 
 def _read_csv_rows(path: Path) -> List[Dict[str, Any]]:
@@ -494,12 +546,19 @@ def compute_metrics_from_run_summary(
     dino_model: str = "facebook/dino-vitb16",
     lpips_net: str = "alex",
     lpips_resize: int = 0,
+    metrics: str | Sequence[str] | None = None,
+    metric_image_resolution: Optional[int] = None,
+    skip_failed_metrics: bool = False,
 ) -> Dict[str, Path]:
     from PIL import Image
 
     run_rows = _read_csv_rows(Path(run_summary_csv))
     if not run_rows:
         raise RuntimeError(f"No rows found in run summary: {run_summary_csv}")
+
+    selected_metrics = parse_metric_names(metrics)
+    if not selected_metrics:
+        raise ValueError("At least one metric must be selected.")
 
     inferred_model = model_name or run_rows[0].get("model_label") or run_rows[0].get("model_type", "model")
     model_label = model_slug(inferred_model)
@@ -547,7 +606,7 @@ def compute_metrics_from_run_summary(
         for run_row in rows:
             sample_id = run_row.get("sample_id") or f"{run_row.get('source_image', 'sample')}__{run_row.get('target_index', '0')}"
             cached_metric = existing_by_sample.get(sample_id)
-            if cached_metric and _complete_metric_row(cached_metric):
+            if cached_metric and _complete_metric_row(cached_metric, selected_metrics):
                 method_metric_rows.append(cached_metric)
                 all_metric_rows.append(cached_metric)
                 continue
@@ -576,8 +635,17 @@ def compute_metrics_from_run_summary(
             source_image_path = run_row.get("source_image_path") or run_row.get("source_image")
             source_image = Image.open(source_image_path).convert("RGB")
             edited_image = Image.open(output_image).convert("RGB")
+            source_image = resize_longest_side(source_image, metric_image_resolution)
+            edited_image = resize_longest_side(edited_image, metric_image_resolution)
             target_prompt = run_row.get("target_prompt", "")
-            metric_values = metric_computer.compute_all(source_image, edited_image, target_prompt)
+            print(f"Metrics for {method}/{sample_id}: {', '.join(selected_metrics)}")
+            metric_values = metric_computer.compute_selected(
+                source_image,
+                edited_image,
+                target_prompt,
+                selected_metrics,
+                skip_failed_metrics=skip_failed_metrics,
+            )
 
             metric_row = {
                 "sample_id": sample_id,
@@ -589,15 +657,13 @@ def compute_metrics_from_run_summary(
                 "setting_id": setting_id,
                 "model": model_label,
                 "output_image": output_image,
-                "CLIP-T": f"{metric_values['CLIP-T']:.6f}",
-                "CLIP-I": f"{metric_values['CLIP-I']:.6f}",
-                "LPIPS": f"{metric_values['LPIPS']:.6f}",
-                "DINO": f"{metric_values['DINO']:.6f}",
-                "DreamSim": f"{metric_values['DreamSim']:.6f}",
                 "NFE": run_row.get("actual_nfe") or run_row.get("NFE") or run_row.get("estimated_nfe", ""),
                 "runtime": run_row.get("elapsed_seconds") or run_row.get("runtime", ""),
                 "cached_generation": run_row.get("cached_generation", ""),
             }
+            for metric in METRIC_DIRECTIONS:
+                value = metric_values.get(metric)
+                metric_row[metric] = "" if value is None else f"{value:.6f}"
             method_metric_rows.append(metric_row)
             all_metric_rows.append(metric_row)
 
@@ -856,6 +922,9 @@ def metrics_command(args: argparse.Namespace) -> None:
         dino_model=args.dino_model,
         lpips_net=args.lpips_net,
         lpips_resize=args.lpips_resize,
+        metrics=args.metrics,
+        metric_image_resolution=args.metric_image_resolution,
+        skip_failed_metrics=args.skip_failed_metrics,
     )
     for label, path in outputs.items():
         print(f"{label}: {path}")
@@ -895,6 +964,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
     metrics_parser.add_argument("--dino_model", default="facebook/dino-vitb16")
     metrics_parser.add_argument("--lpips_net", default="alex")
     metrics_parser.add_argument("--lpips_resize", type=int, default=0)
+    metrics_parser.add_argument(
+        "--metrics",
+        default=",".join(METRIC_DIRECTIONS),
+        help="Comma-separated metrics to compute. Available: CLIP-T,CLIP-I,LPIPS,DINO,DreamSim.",
+    )
+    metrics_parser.add_argument(
+        "--metric_image_resolution",
+        type=int,
+        default=None,
+        help="Resize source and edited images' longest side before metrics. Useful for Colab smoke tests.",
+    )
+    metrics_parser.add_argument(
+        "--skip_failed_metrics",
+        action="store_true",
+        help="Leave a metric blank and keep going if an optional metric dependency fails.",
+    )
     metrics_parser.set_defaults(func=metrics_command)
 
     return parser

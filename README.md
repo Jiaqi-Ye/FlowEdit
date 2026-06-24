@@ -32,7 +32,7 @@ The branch includes a reusable full-evaluation helper for the released FlowEdit 
 ```bash
 python flowedit_eval.py write-config --model_name sd3 --dataset_yaml Data/flowedit.yaml --output_yaml outputs/flowedit_eval/sd3/eval_config.yaml
 python run_script.py --exp_yaml outputs/flowedit_eval/sd3/eval_config.yaml --dataset_yaml Data/flowedit.yaml --sample_limit 10 --image_resolution 512 --eval_output_root outputs/flowedit_eval
-python flowedit_eval.py metrics --run_summary_csv outputs/flowedit_eval/sd3/run_summary.csv --output_root outputs/flowedit_eval --model_name sd3
+python flowedit_eval.py metrics --run_summary_csv outputs/flowedit_eval/sd3/run_summary.csv --output_root outputs/flowedit_eval --model_name sd3 --metric_image_resolution 512 --lpips_resize 512 --skip_failed_metrics
 ```
 
 Use `--sample_limit 3`, `10`, `20`, `50`, or `100` for staged runs, and omit it for the full 281 image-prompt pairs. Use `--image_resolution 512` for Colab-friendly smoke tests, and omit it for native 1024px paper-resolution evaluation. Set `--force_rerun` on `run_script.py` to ignore cached edited images.
