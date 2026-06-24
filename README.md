@@ -25,6 +25,18 @@ Run editing with Stable Diffusion 3: `python run_script.py --exp_yaml SD3_exp.ya
 
 Run editing with Flux: `python run_script.py --exp_yaml FLUX_exp.yaml`
 
+## Full FlowEdit evaluation dataset
+
+The branch includes a reusable full-evaluation helper for the released FlowEdit dataset in `Data/flowedit.yaml`:
+
+```bash
+python flowedit_eval.py write-config --model_name sd3 --dataset_yaml Data/flowedit.yaml --output_yaml outputs/flowedit_eval/sd3/eval_config.yaml
+python run_script.py --exp_yaml outputs/flowedit_eval/sd3/eval_config.yaml --dataset_yaml Data/flowedit.yaml --sample_limit 10 --eval_output_root outputs/flowedit_eval
+python flowedit_eval.py metrics --run_summary_csv outputs/flowedit_eval/sd3/run_summary.csv --output_root outputs/flowedit_eval --model_name sd3
+```
+
+Use `--sample_limit 3`, `10`, `20`, `50`, or `100` for staged runs, and omit it for the full 281 image-prompt pairs. Set `--force_rerun` on `run_script.py` to ignore cached edited images.
+
 ## Usage - your own examples
 
 * Upload images to `example_images` folder. 

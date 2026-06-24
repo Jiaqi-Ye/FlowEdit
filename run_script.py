@@ -4,6 +4,7 @@ import os
 import random
 import time
 from contextlib import nullcontext
+from pathlib import Path
 from typing import Optional, Tuple
 
 import numpy as np
@@ -16,6 +17,14 @@ from huggingface_hub.errors import GatedRepoError, HfHubHTTPError, RepositoryNot
 from PIL import Image
 
 from FlowEdit_utils import FlowEditSD3, FlowEditFLUX, normalize_solver_type
+from flowedit_eval import (
+    build_eval_output_paths,
+    load_eval_samples,
+    method_name_from_solver,
+    model_slug,
+    read_json,
+    write_json,
+)
 
 
 HF_TOKEN_ENV_KEYS = (
@@ -258,6 +267,47 @@ if __name__ == "__main__":
         action="store_true",
         help="Stop after model access, loading, and runtime placement checks succeed.",
     )
+    parser.add_argument(
+        "--dataset_yaml",
+        type=str,
+        default=None,
+        help="Override the dataset YAML for every experiment. Supports Data/flowedit.yaml and legacy edits YAML files.",
+    )
+    parser.add_argument(
+        "--data_images_dir",
+        type=str,
+        default="Data/Images",
+        help="Directory used to resolve FlowEdit released-dataset image paths such as flowedit_data/name.png.",
+    )
+    parser.add_argument(
+        "--sample_limit",
+        type=int,
+        default=None,
+        help="Limit the flattened image-prompt pairs. Omit for the full dataset.",
+    )
+    parser.add_argument(
+        "--sample_offset",
+        type=int,
+        default=0,
+        help="Skip this many flattened image-prompt pairs before applying sample_limit.",
+    )
+    parser.add_argument(
+        "--eval_output_root",
+        type=str,
+        default=None,
+        help="Use the full-eval output layout under this root, e.g. outputs/flowedit_eval.",
+    )
+    parser.add_argument(
+        "--force_rerun",
+        action="store_true",
+        help="Regenerate edited images even when cached full-eval outputs already exist.",
+    )
+    parser.add_argument(
+        "--run_summary_csv",
+        type=str,
+        default=None,
+        help="Where to write the generation/runtime CSV. Defaults to outputs/run_summary.csv or <eval_output_root>/<model>/run_summary.csv.",
+    )
 
     args = parser.parse_args()
 
@@ -293,7 +343,14 @@ if __name__ == "__main__":
         print(f"CUDA device {device_number}: {gpu_name} ({total_vram_gb:.1f} GiB VRAM)")
 
     model_type = exp_configs[0]["model_type"] # currently only one model type per run
+    model_label = model_slug(model_type)
     model_id = exp_configs[0].get("model_id", default_model_id(model_type))
+    if args.run_summary_csv:
+        summary_path = args.run_summary_csv
+    elif args.eval_output_root:
+        summary_path = os.path.join(args.eval_output_root, model_label, "run_summary.csv")
+    else:
+        summary_path = "outputs/run_summary.csv"
     requested_load_mode = args.pipeline_load_mode
     if requested_load_mode == "auto":
         requested_load_mode = exp_configs[0].get("pipeline_load_mode", "auto")
@@ -321,7 +378,6 @@ if __name__ == "__main__":
     for exp_dict in exp_configs:
 
         exp_name = exp_dict["exp_name"]
-        # model_type = exp_dict["model_type"]
         T_steps = exp_dict["T_steps"]
         n_avg = exp_dict["n_avg"]
         src_guidance_scale = exp_dict["src_guidance_scale"]
@@ -330,12 +386,27 @@ if __name__ == "__main__":
         n_max = exp_dict["n_max"]
         solver_type = exp_dict.get("solver_type", "euler")
         solver_info = describe_flowedit_solver(solver_type)
+        method = exp_dict.get("method_name") or method_name_from_solver(solver_type)
+        method_family = exp_dict.get("method_family", method)
+        setting_id = exp_dict.get("setting_id", "default")
         pc_guidance_lambda = exp_dict.get("pc_guidance_lambda", 1.0)
         pc_guidance_gamma = exp_dict.get("pc_guidance_gamma", 1.0)
         pc_enable_below_t = exp_dict.get("pc_enable_below_t", 1.0)
         pc_guidance_weight = exp_dict.get("pc_guidance_weight", 1.0)
         estimated_nfe = estimate_flowedit_nfe(T_steps, n_min, n_max, n_avg, solver_type)
         seed = exp_dict["seed"]
+        dataset_yaml = args.dataset_yaml or exp_dict["dataset_yaml"]
+        samples = load_eval_samples(
+            dataset_yaml,
+            sample_limit=args.sample_limit,
+            sample_offset=args.sample_offset,
+            repo_root=repo_root,
+            data_images_dir=args.data_images_dir,
+        )
+        print(
+            f"Experiment {exp_name}: method={method}, solver={solver_type}, "
+            f"samples={len(samples)}, estimated NFE={estimated_nfe}"
+        )
 
         # set seed
         random.seed(seed)
@@ -343,35 +414,57 @@ if __name__ == "__main__":
         torch.manual_seed(seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
-        dataset_yaml = exp_dict["dataset_yaml"]
-        with open(dataset_yaml) as file:
-            dataset_configs = yaml.load(file, Loader=yaml.FullLoader)
 
-        # check dataset_configs 
-        for data_dict in dataset_configs:
-            tar_prompts = data_dict["target_prompts"]
+        for sample in samples:
+            src_prompt = sample.source_prompt
+            tar_prompt = sample.target_prompt
+            negative_prompt = sample.negative_prompt
+            image_src_path = sample.source_image_path
 
-        for data_dict in dataset_configs:
+            if args.eval_output_root:
+                paths = build_eval_output_paths(
+                    args.eval_output_root,
+                    model_label,
+                    method,
+                    sample.sample_id,
+                    setting_id,
+                )
+                output_image_path = paths["output_image"]
+                metadata_json_path = paths["metadata_json"]
+                prompts_txt_path = paths["prompts_txt"]
+                save_dir = str(paths["image_dir"])
+            else:
+                save_dir = f"outputs/{exp_name}/{model_type}/src_{sample.image_id}/tar_{sample.target_index}"
+                filename = (
+                    f"output_solver_{solver_type}_T_steps_{T_steps}_n_avg_{n_avg}_"
+                    f"cfg_enc_{src_guidance_scale}_cfg_dec{tar_guidance_scale}_"
+                    f"n_min_{n_min}_n_max_{n_max}_seed{seed}.png"
+                )
+                output_image_path = Path(save_dir) / filename
+                metadata_json_path = Path(save_dir) / "metadata.json"
+                prompts_txt_path = Path(save_dir) / "prompts.txt"
 
-            src_prompt = data_dict["source_prompt"]
-            tar_prompts = data_dict["target_prompts"]
-            negative_prompt = data_dict.get("negative_prompt", "")
-            image_src_path = data_dict["input_img"]
+            output_image_path = Path(output_image_path)
+            cached_generation = False
+            cached_metadata = read_json(metadata_json_path)
+            actual_nfe = cached_metadata.get("actual_nfe", estimated_nfe)
+            elapsed_seconds = float(cached_metadata.get("elapsed_seconds", 0.0) or 0.0)
 
-            # load image
-            image = Image.open(image_src_path)
-            # crop image to have both dimensions divisibe by 16 - avoids issues with resizing
-            image = image.crop((0, 0, image.width - image.width % 16, image.height - image.height % 16))
-            image_src = pipe.image_processor.preprocess(image)
-            image_src = image_src.to(device=device, dtype=model_dtype)
-            with inference_context(runtime_name), torch.inference_mode():
-                x0_src_denorm = pipe.vae.encode(image_src).latent_dist.mode()
-            x0_src = (x0_src_denorm - pipe.vae.config.shift_factor) * pipe.vae.config.scaling_factor
-            x0_src = x0_src.to(device)
-            
-            for tar_num, tar_prompt in enumerate(tar_prompts):
-
+            if args.eval_output_root and output_image_path.exists() and not args.force_rerun:
+                cached_generation = True
+                print(f"Skip cached output: {output_image_path}")
+            else:
                 start_time = time.perf_counter()
+
+                image = Image.open(image_src_path).convert("RGB")
+                # Crop to dimensions divisible by 16 to avoid VAE resizing issues.
+                image = image.crop((0, 0, image.width - image.width % 16, image.height - image.height % 16))
+                image_src = pipe.image_processor.preprocess(image)
+                image_src = image_src.to(device=device, dtype=model_dtype)
+                with inference_context(runtime_name), torch.inference_mode():
+                    x0_src_denorm = pipe.vae.encode(image_src).latent_dist.mode()
+                x0_src = (x0_src_denorm - pipe.vae.config.shift_factor) * pipe.vae.config.scaling_factor
+                x0_src = x0_src.to(device)
 
                 if model_type == 'SD3':
                     x0_tar, flowedit_stats = FlowEditSD3(pipe,
@@ -420,83 +513,94 @@ if __name__ == "__main__":
                     image_tar = pipe.vae.decode(x0_tar_denorm, return_dict=False)[0]
                 image_tar = pipe.image_processor.postprocess(image_tar)
 
-                src_prompt_txt = data_dict["input_img"].split("/")[-1].split(".")[0]
-
-                tar_prompt_txt = str(tar_num)
-                
-                # make sure to create the directories before saving
-                save_dir = f"outputs/{exp_name}/{model_type}/src_{src_prompt_txt}/tar_{tar_prompt_txt}"
-                os.makedirs(save_dir, exist_ok=True)
-                
-                image_tar[0].save(f"{save_dir}/output_solver_{solver_type}_T_steps_{T_steps}_n_avg_{n_avg}_cfg_enc_{src_guidance_scale}_cfg_dec{tar_guidance_scale}_n_min_{n_min}_n_max_{n_max}_seed{seed}.png")
+                output_image_path.parent.mkdir(parents=True, exist_ok=True)
+                image_tar[0].save(output_image_path)
                 elapsed_seconds = time.perf_counter() - start_time
-                run_summaries.append({
-                    "exp_name": exp_name,
-                    "model_type": model_type,
-                    "model_id": model_id,
-                    "solver_type": solver_type,
-                    "normalized_solver_type": solver_info["normalized_solver_type"],
-                    "theory_family": solver_info["theory_family"],
-                    "theory_formula": solver_info["theory_formula"],
-                    "midpoint_space": solver_info["midpoint_space"],
-                    "correction_mode": solver_info["correction_mode"],
-                    "runtime_name": runtime_name,
-                    "pipeline_load_mode": pipeline_load_mode,
-                    "hf_token_source": hf_token_source or "",
-                    "hf_user": hf_user or "",
-                    "source_image": image_src_path,
-                    "target_index": tar_num,
-                    "T_steps": T_steps,
-                    "n_avg": n_avg,
-                    "src_guidance_scale": src_guidance_scale,
-                    "tar_guidance_scale": tar_guidance_scale,
-                    "n_min": n_min,
-                    "n_max": n_max,
-                    "estimated_nfe": estimated_nfe,
-                    "actual_nfe": flowedit_stats.get("actual_nfe"),
-                    "pc_guidance_lambda": pc_guidance_lambda,
-                    "pc_guidance_gamma": pc_guidance_gamma,
-                    "pc_enable_below_t": pc_enable_below_t,
-                    "pc_guidance_weight": pc_guidance_weight,
-                    "seed": seed,
-                    "negative_prompt": negative_prompt,
-                    "elapsed_seconds": f"{elapsed_seconds:.3f}",
-                    "output_dir": save_dir,
-                })
-                # also save source and target prompt in txt file
-                with open(f"{save_dir}/prompts.txt", "w") as f:
-                    f.write(f"Source prompt: {src_prompt}\n")
-                    f.write(f"Target prompt: {tar_prompt}\n")
-                    f.write(f"Negative prompt: {negative_prompt}\n")
-                    f.write(f"Seed: {seed}\n")
-                    f.write(f"Model ID: {model_id}\n")
-                    f.write(f"Sampler type: {model_type}\n")
-                    f.write(f"Solver type: {solver_type}\n")
-                    f.write(f"Normalized solver type: {solver_info['normalized_solver_type']}\n")
-                    f.write(f"Theory family: {solver_info['theory_family']}\n")
-                    f.write(f"Theory formula: {solver_info['theory_formula']}\n")
-                    f.write(f"Midpoint space: {solver_info['midpoint_space']}\n")
-                    f.write(f"Correction mode: {solver_info['correction_mode']}\n")
-                    f.write(f"Runtime: {runtime_name}\n")
-                    f.write(f"Pipeline load mode: {pipeline_load_mode}\n")
-                    f.write(f"Hugging Face token source: {hf_token_source or 'none'}\n")
-                    f.write(f"Hugging Face user: {hf_user or 'unknown'}\n")
-                    f.write(f"Estimated NFE: {estimated_nfe}\n")
-                    f.write(f"Actual NFE: {flowedit_stats.get('actual_nfe')}\n")
-                    f.write(f"PC guidance lambda: {pc_guidance_lambda}\n")
-                    f.write(f"PC guidance gamma: {pc_guidance_gamma}\n")
-                    f.write(f"PC enable below t: {pc_enable_below_t}\n")
-                    f.write(f"PC guidance weight: {pc_guidance_weight}\n")
-                    f.write(f"Runtime seconds: {elapsed_seconds:.3f}\n")
-                
+                actual_nfe = flowedit_stats.get("actual_nfe", estimated_nfe)
 
+            run_row = {
+                "exp_name": exp_name,
+                "model_type": model_type,
+                "model_label": model_label,
+                "model_id": model_id,
+                "method": method,
+                "method_family": method_family,
+                "setting_id": setting_id,
+                "solver_type": solver_type,
+                "normalized_solver_type": solver_info["normalized_solver_type"],
+                "theory_family": solver_info["theory_family"],
+                "theory_formula": solver_info["theory_formula"],
+                "midpoint_space": solver_info["midpoint_space"],
+                "correction_mode": solver_info["correction_mode"],
+                "runtime_name": runtime_name,
+                "pipeline_load_mode": pipeline_load_mode,
+                "hf_token_source": hf_token_source or "",
+                "hf_user": hf_user or "",
+                "sample_id": sample.sample_id,
+                "image_id": sample.image_id,
+                "source_image": image_src_path,
+                "source_image_path": image_src_path,
+                "source_prompt": src_prompt,
+                "target_index": sample.target_index,
+                "target_code": sample.target_code,
+                "target_prompt": tar_prompt,
+                "T_steps": T_steps,
+                "n_avg": n_avg,
+                "src_guidance_scale": src_guidance_scale,
+                "tar_guidance_scale": tar_guidance_scale,
+                "n_min": n_min,
+                "n_max": n_max,
+                "estimated_nfe": estimated_nfe,
+                "actual_nfe": actual_nfe,
+                "NFE": actual_nfe,
+                "pc_guidance_lambda": pc_guidance_lambda,
+                "pc_guidance_gamma": pc_guidance_gamma,
+                "pc_enable_below_t": pc_enable_below_t,
+                "pc_guidance_weight": pc_guidance_weight,
+                "seed": seed,
+                "negative_prompt": negative_prompt,
+                "elapsed_seconds": f"{elapsed_seconds:.3f}",
+                "runtime": f"{elapsed_seconds:.3f}",
+                "cached_generation": cached_generation,
+                "output_dir": save_dir,
+                "output_image": str(output_image_path),
+            }
+            run_summaries.append(run_row)
 
-
-
+            write_json(metadata_json_path, run_row)
+            prompts_txt_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(prompts_txt_path, "w", encoding="utf-8") as f:
+                f.write(f"Sample ID: {sample.sample_id}\n")
+                f.write(f"Source image: {image_src_path}\n")
+                f.write(f"Source prompt: {src_prompt}\n")
+                f.write(f"Target prompt: {tar_prompt}\n")
+                f.write(f"Negative prompt: {negative_prompt}\n")
+                f.write(f"Seed: {seed}\n")
+                f.write(f"Model ID: {model_id}\n")
+                f.write(f"Sampler type: {model_type}\n")
+                f.write(f"Method: {method}\n")
+                f.write(f"Solver type: {solver_type}\n")
+                f.write(f"Normalized solver type: {solver_info['normalized_solver_type']}\n")
+                f.write(f"Theory family: {solver_info['theory_family']}\n")
+                f.write(f"Theory formula: {solver_info['theory_formula']}\n")
+                f.write(f"Midpoint space: {solver_info['midpoint_space']}\n")
+                f.write(f"Correction mode: {solver_info['correction_mode']}\n")
+                f.write(f"Runtime: {runtime_name}\n")
+                f.write(f"Pipeline load mode: {pipeline_load_mode}\n")
+                f.write(f"Hugging Face token source: {hf_token_source or 'none'}\n")
+                f.write(f"Hugging Face user: {hf_user or 'unknown'}\n")
+                f.write(f"Estimated NFE: {estimated_nfe}\n")
+                f.write(f"Actual NFE: {actual_nfe}\n")
+                f.write(f"PC guidance lambda: {pc_guidance_lambda}\n")
+                f.write(f"PC guidance gamma: {pc_guidance_gamma}\n")
+                f.write(f"PC enable below t: {pc_enable_below_t}\n")
+                f.write(f"PC guidance weight: {pc_guidance_weight}\n")
+                f.write(f"Runtime seconds: {elapsed_seconds:.3f}\n")
     if run_summaries:
-        summary_path = "outputs/run_summary.csv"
-        os.makedirs(os.path.dirname(summary_path), exist_ok=True)
-        with open(summary_path, "w", newline="") as f:
+        summary_dir = os.path.dirname(summary_path)
+        if summary_dir:
+            os.makedirs(summary_dir, exist_ok=True)
+        with open(summary_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=run_summaries[0].keys())
             writer.writeheader()
             writer.writerows(run_summaries)
